@@ -1,0 +1,16 @@
+[package]
+name = "driveck-gtk"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "driveck"
+path = "src/main.rs"
+
+[dependencies]
+driveck-core.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+gtk.workspace = true

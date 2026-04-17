@@ -1,0 +1,35 @@
+[workspace]
+members = [
+    "crates/driveck-core",
+    "crates/driveck-ffi",
+    "crates/driveck-cli",
+    "crates/driveck-gtk",
+    "crates/driveck-win32",
+]
+default-members = [
+    "crates/driveck-core",
+    "crates/driveck-cli",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+version = "0.1.0"
+rust-version = "1.87"
+license = "MIT"
+
+[workspace.dependencies]
+chrono = { version = "0.4.42", default-features = false, features = ["clock"] }
+gtk = { package = "gtk4", version = "0.10.1" }
+libc = "0.2.177"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+tempfile = "3.23.0"
+thiserror = "2.0.17"
+driveck-core = { path = "crates/driveck-core" }
+windows = "0.61.3"
+
+[profile.release]
+codegen-units = 1
+lto = "thin"
+strip = "symbols"
