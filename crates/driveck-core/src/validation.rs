@@ -123,6 +123,15 @@ pub fn validate_target_with_callbacks(
             None,
         ));
     }
+    if target.is_mounted {
+        return Err(ValidationFailure::new(
+            format!(
+                "Refusing to validate {} because the disk or one of its volumes is mounted.",
+                target.path
+            ),
+            None,
+        ));
+    }
 
     let mut report = ValidationReport::default();
     report.started_at = current_timestamp();
@@ -329,19 +338,14 @@ fn calibrate_region_size(
         );
         if status != SampleStatus::Ok {
             emit_progress(progress, "Calibrating", step, max_steps, true);
-            if candidate == minimum_region {
-                return Err(format!(
-                    "Initial calibration probe failed on {} writes ({}).",
-                    format_bytes(candidate),
-                    sample_status_name(status)
-                ));
+            if let Some(message) = calibration_failure_message(candidate, minimum_region, status) {
+                return Err(message);
             }
             break;
         }
 
         chosen = candidate;
         if candidate == DRIVECK_MAX_REGION_SIZE {
-            chosen = minimum_region;
             break;
         }
         candidate <<= 1;
@@ -349,6 +353,27 @@ fn calibrate_region_size(
 
     emit_progress(progress, "Calibrating", step, max_steps, true);
     Ok(chosen as usize)
+}
+
+fn calibration_failure_message(
+    candidate: u64,
+    minimum_region: u64,
+    status: SampleStatus,
+) -> Option<String> {
+    if status == SampleStatus::RestoreError {
+        return Some(format!(
+            "Calibration probe failed while restoring original data on {} writes. Validation stopped to avoid leaving sampled data modified.",
+            format_bytes(candidate)
+        ));
+    }
+
+    (candidate == minimum_region).then(|| {
+        format!(
+            "Initial calibration probe failed on {} writes ({}).",
+            format_bytes(candidate),
+            sample_status_name(status)
+        )
+    })
 }
 
 fn recorded_read(
@@ -636,7 +661,11 @@ fn count_status(report: &mut ValidationReport, status: SampleStatus) {
 
 #[cfg(test)]
 mod tests {
-    use super::build_sample_order;
+    use crate::{
+        DRIVECK_MIN_REGION_SIZE, DRIVECK_SAMPLE_COUNT, ValidationOptions, validate_target,
+    };
+
+    use super::{SampleStatus, TargetInfo, build_sample_order, calibration_failure_message};
 
     #[test]
     fn sample_order_preserves_front_and_back_priority() {
@@ -647,5 +676,56 @@ mod tests {
         let mut sorted = order.to_vec();
         sorted.sort_unstable();
         assert_eq!(sorted, (0usize..576).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn calibration_restore_errors_abort_even_above_minimum_region() {
+        let message = calibration_failure_message(
+            128 * 1024,
+            DRIVECK_MIN_REGION_SIZE,
+            SampleStatus::RestoreError,
+        )
+        .expect("restore errors must stop calibration");
+        assert!(message.contains("restoring original data"));
+    }
+
+    #[test]
+    fn calibration_can_fall_back_after_non_restore_failure_on_larger_region() {
+        assert!(
+            calibration_failure_message(
+                128 * 1024,
+                DRIVECK_MIN_REGION_SIZE,
+                SampleStatus::VerifyMismatch
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
+    fn calibration_minimum_probe_failures_remain_fatal() {
+        let message = calibration_failure_message(
+            DRIVECK_MIN_REGION_SIZE,
+            DRIVECK_MIN_REGION_SIZE,
+            SampleStatus::VerifyMismatch,
+        )
+        .expect("minimum-size probe failures must abort");
+        assert!(message.contains("Initial calibration probe failed"));
+    }
+
+    #[test]
+    fn mounted_targets_are_rejected_before_opening() {
+        let target = TargetInfo {
+            path: "/path/that/should/not/be/opened".into(),
+            name: "diskX".into(),
+            size_bytes: DRIVECK_MIN_REGION_SIZE * DRIVECK_SAMPLE_COUNT as u64,
+            logical_block_size: DRIVECK_MIN_REGION_SIZE as u32,
+            is_block_device: true,
+            is_mounted: true,
+            ..TargetInfo::default()
+        };
+
+        let error = validate_target(&target, &ValidationOptions::default())
+            .expect_err("mounted targets must be rejected");
+        assert!(error.message.contains("mounted"));
     }
 }
