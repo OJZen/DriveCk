@@ -1,3 +1,7 @@
 /target/
 /.codex
 .DS_Store
+/macos/Build/
+*.xcuserstate
+*.xcworkspace/xcuserdata/
+*.xcodeproj/xcuserdata/

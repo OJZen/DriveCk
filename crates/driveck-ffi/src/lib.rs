@@ -1,10 +1,11 @@
 use std::ffi::{CStr, CString, c_char, c_void};
 
 use driveck_core::{
-    ProgressObserver, ProgressUpdate, ValidationOptions, ValidationResponse, collect_targets,
-    discover_target, format_report_text, validate_target_with_callbacks,
+    ProgressObserver, ProgressUpdate, TargetInfo, ValidationFailure, ValidationOptions,
+    ValidationResponse, collect_targets, discover_target, format_report_text,
+    validate_target_with_callbacks,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 type ProgressCallback = Option<
     extern "C" fn(
@@ -21,6 +22,19 @@ type CancelCallback = Option<extern "C" fn(user_data: *mut c_void) -> bool>;
 struct Envelope<T> {
     ok: bool,
     data: Option<T>,
+    error: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ValidationRequest {
+    target: TargetInfo,
+    #[serde(default)]
+    options: ValidationOptions,
+}
+
+#[derive(Serialize)]
+struct ValidationExecutionResult {
+    response: Option<ValidationResponse>,
     error: Option<String>,
 }
 
@@ -80,6 +94,44 @@ fn decode_input(input: *const c_char, label: &str) -> Result<String, String> {
     Ok(text.to_string())
 }
 
+fn decode_json<T: for<'de> Deserialize<'de>>(
+    input: *const c_char,
+    label: &str,
+) -> Result<T, String> {
+    let text = decode_input(input, label)?;
+    serde_json::from_str(&text).map_err(|error| format!("{label} is invalid JSON: {error}"))
+}
+
+fn execute_validation(
+    target: TargetInfo,
+    options: ValidationOptions,
+    progress_callback: ProgressCallback,
+    cancel_callback: CancelCallback,
+    user_data: *mut c_void,
+) -> Result<ValidationExecutionResult, String> {
+    let mut progress_bridge = FfiProgress {
+        callback: progress_callback,
+        user_data,
+    };
+    let cancel_bridge = || cancel_callback.is_some_and(|callback| callback(user_data));
+    let result = validate_target_with_callbacks(
+        &target,
+        &options,
+        Some(&mut progress_bridge),
+        Some(&cancel_bridge),
+    );
+    Ok(match result {
+        Ok(report) => ValidationExecutionResult {
+            response: Some(ValidationResponse { target, report }),
+            error: None,
+        },
+        Err(ValidationFailure { message, report }) => ValidationExecutionResult {
+            response: report.map(|report| ValidationResponse { target, report }),
+            error: Some(message),
+        },
+    })
+}
+
 #[unsafe(no_mangle)]
 pub extern "C" fn driveck_ffi_free_string(value: *mut c_char) {
     if value.is_null() {
@@ -112,24 +164,42 @@ pub extern "C" fn driveck_ffi_validate_path_json(
     cancel_callback: CancelCallback,
     user_data: *mut c_void,
 ) -> *mut c_char {
-    response_json::<ValidationResponse>((|| {
+    response_json::<ValidationExecutionResult>((|| {
         let path = decode_input(path, "path")?;
         let target = discover_target(&path).map_err(|error| error.message)?;
-        let mut progress_bridge = FfiProgress {
-            callback: progress_callback,
-            user_data,
-        };
-        let cancel_bridge = || cancel_callback.is_some_and(|callback| callback(user_data));
-        let report = validate_target_with_callbacks(
-            &target,
-            &ValidationOptions {
+        execute_validation(
+            target,
+            ValidationOptions {
                 seed: seed_set.then_some(seed),
             },
-            Some(&mut progress_bridge),
-            Some(&cancel_bridge),
+            progress_callback,
+            cancel_callback,
+            user_data,
         )
-        .map_err(|error| error.message)?;
-        Ok(ValidationResponse { target, report })
+    })())
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn driveck_ffi_validate_target_json(
+    target_json: *const c_char,
+    seed_set: bool,
+    seed: u64,
+    progress_callback: ProgressCallback,
+    cancel_callback: CancelCallback,
+    user_data: *mut c_void,
+) -> *mut c_char {
+    response_json::<ValidationExecutionResult>((|| {
+        let mut request: ValidationRequest = decode_json(target_json, "target_json")?;
+        if seed_set {
+            request.options.seed = Some(seed);
+        }
+        execute_validation(
+            request.target,
+            request.options,
+            progress_callback,
+            cancel_callback,
+            user_data,
+        )
     })())
 }
 
