@@ -149,6 +149,7 @@ enum DriveCkPrivilegedExecutionService {
 
             var hasRequestedCancel = false
             var lastProgressSnapshot: DriveCkProgressSnapshot?
+            var progressReadOffset: UInt64 = 0
 
             while true {
                 pipeMonitor.poll()
@@ -158,20 +159,31 @@ enum DriveCkPrivilegedExecutionService {
                     hasRequestedCancel = true
                 }
 
-                if let snapshot = try DriveCkPrivilegedHelperIPC.readJSONIfPresent(
+                let snapshots = try DriveCkPrivilegedHelperIPC.readJSONLinesIfPresent(
                     DriveCkProgressSnapshot.self,
-                    from: context.progressURL
-                ),
-                   snapshot != lastProgressSnapshot
-                {
-                    lastProgressSnapshot = snapshot
-                    onProgress(snapshot)
-                }
+                    from: context.progressURL,
+                    offset: &progressReadOffset
+                )
+                try await emitProgressSnapshots(
+                    snapshots,
+                    lastProgressSnapshot: &lastProgressSnapshot,
+                    onProgress: onProgress
+                )
 
                 if let response = try DriveCkPrivilegedHelperIPC.readJSONIfPresent(
                     DriveCkPrivilegedHelperResponse.self,
                     from: context.responseURL
                 ) {
+                    let tailSnapshots = try DriveCkPrivilegedHelperIPC.readJSONLinesIfPresent(
+                        DriveCkProgressSnapshot.self,
+                        from: context.progressURL,
+                        offset: &progressReadOffset
+                    )
+                    try await emitProgressSnapshots(
+                        tailSnapshots,
+                        lastProgressSnapshot: &lastProgressSnapshot,
+                        onProgress: onProgress
+                    )
                     if let error = response.userFacingError {
                         throw error
                     }
@@ -187,10 +199,23 @@ enum DriveCkPrivilegedExecutionService {
                     )
                 }
 
-                try await Task.sleep(nanoseconds: 150_000_000)
+                try await Task.sleep(nanoseconds: 16_000_000)
             }
         }
         .value
+    }
+
+    private static func emitProgressSnapshots(
+        _ snapshots: [DriveCkProgressSnapshot],
+        lastProgressSnapshot: inout DriveCkProgressSnapshot?,
+        onProgress: @escaping @Sendable (DriveCkProgressSnapshot) -> Void
+    ) async throws {
+        for snapshot in snapshots where snapshot != lastProgressSnapshot {
+            lastProgressSnapshot = snapshot
+            await MainActor.run {
+                onProgress(snapshot)
+            }
+        }
     }
 
     private static func resolveHelperExecutable() throws -> URL {
