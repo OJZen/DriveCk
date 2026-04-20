@@ -39,6 +39,7 @@ final class DriveCkAppViewModel {
     var reportText = ""
     var presentedError: DriveCkUserFacingError?
     var isCancelling = false
+    var liveSampleStatus: [DriveCkSampleStatus] = []
 
     private var hasLoaded = false
     private var validationTask: Task<Void, Never>?
@@ -77,9 +78,9 @@ final class DriveCkAppViewModel {
     var currentProgress: DriveCkProgressSnapshot {
         switch validationState {
         case .idle:
-            return DriveCkProgressSnapshot(phase: "Idle", current: 0, total: 1, finalUpdate: false)
+            return DriveCkProgressSnapshot(phase: "Idle", current: 0, total: 1, finalUpdate: false, sampleIndex: nil, sampleStatus: nil)
         case .preparing:
-            return DriveCkProgressSnapshot(phase: "Preparing", current: 0, total: 1, finalUpdate: false)
+            return DriveCkProgressSnapshot(phase: "Preparing", current: 0, total: 1, finalUpdate: false, sampleIndex: nil, sampleStatus: nil)
         case let .running(snapshot):
             return snapshot
         case let .finished(result):
@@ -88,10 +89,12 @@ final class DriveCkAppViewModel {
                     phase: result.error == nil ? "Finished" : "Finished with issues",
                     current: response.report.completedSamples,
                     total: max(response.report.sampleStatus.count, 1),
-                    finalUpdate: true
+                    finalUpdate: true,
+                    sampleIndex: nil,
+                    sampleStatus: nil
                 )
             }
-            return DriveCkProgressSnapshot(phase: "Finished", current: 1, total: 1, finalUpdate: true)
+            return DriveCkProgressSnapshot(phase: "Finished", current: 1, total: 1, finalUpdate: true, sampleIndex: nil, sampleStatus: nil)
         }
     }
 
@@ -99,13 +102,13 @@ final class DriveCkAppViewModel {
         switch validationState {
         case .idle:
             return selectedTarget == nil
-                ? "Choose a USB whole-disk target to begin."
-                : "DriveCk will request administrator access once, unmount the selected USB disk if needed, and then begin validation."
+                ? "Choose a USB whole-disk target."
+                : "Ready. Admin approval is requested when validation starts."
         case .preparing:
             if isCancelling {
                 return "Stopping validation…"
             }
-            return "Preparing validation and unmounting the selected disk if needed…"
+            return "Preparing validation and unmounting if needed…"
         case let .running(snapshot):
             if isCancelling {
                 return "Stopping validation… \(snapshot.current)/\(snapshot.total)"
@@ -132,6 +135,58 @@ final class DriveCkAppViewModel {
 
     var canExportReport: Bool {
         !isRunning && currentResponse != nil && !reportText.isEmpty
+    }
+
+    var canCopyReport: Bool {
+        !reportText.isEmpty
+    }
+
+    var displayedMapStatuses: [DriveCkSampleStatus]? {
+        if let response = currentResponse {
+            return response.report.sampleStatus
+        }
+        return liveSampleStatus.isEmpty ? nil : liveSampleStatus
+    }
+
+    var displayedMapOffsets: [UInt64]? {
+        currentResponse?.report.sampleOffsets
+    }
+
+    var displayedMapCompletedSamples: Int {
+        if let response = currentResponse {
+            return response.report.completedSamples
+        }
+        return liveSampleStatus.reduce(into: 0) { partial, status in
+            if status != .Untested {
+                partial += 1
+            }
+        }
+    }
+
+    var displayedMapTotalSamples: Int {
+        if let response = currentResponse {
+            return response.report.sampleStatus.count
+        }
+        return liveSampleStatus.count
+    }
+
+    var displayedMapPhase: String {
+        if currentResponse != nil {
+            return latestResult?.error == nil ? "Completed" : "Finished with issues"
+        }
+        return currentProgress.phase
+    }
+
+    var displayedMapHighlightedSampleIndex: Int? {
+        guard currentResponse == nil else {
+            return nil
+        }
+        guard case let .running(snapshot) = validationState,
+              snapshot.phase == "Validating"
+        else {
+            return nil
+        }
+        return snapshot.sampleIndex
     }
 
     var inlineError: DriveCkUserFacingError? {
@@ -218,6 +273,7 @@ final class DriveCkAppViewModel {
         clearResultState()
         isCancelling = false
         validationState = .preparing
+        liveSampleStatus = Array(repeating: .Untested, count: driveCkDefaultMapCellCount)
 
         let request = DriveCkValidationRequest(
             target: target,
@@ -233,11 +289,11 @@ final class DriveCkAppViewModel {
                 let result = try await DriveCkPrivilegedExecutionService.validate(
                     request: request,
                     onProgress: { [weak self] snapshot in
-                        Task { @MainActor in
+                        MainActor.assumeIsolated {
                             guard let self else {
                                 return
                             }
-                            self.validationState = .running(snapshot)
+                            self.applyProgress(snapshot)
                         }
                     },
                     isCancelled: { cancellationFlag.isCancelled }
@@ -252,6 +308,7 @@ final class DriveCkAppViewModel {
                     self.activeTarget = nil
                     self.isCancelling = false
                     self.validationState = .idle
+                    self.liveSampleStatus = []
                     if let userFacing = error as? DriveCkUserFacingError {
                         self.presentedError = userFacing
                     } else {
@@ -300,6 +357,7 @@ final class DriveCkAppViewModel {
         isCancelling = false
         latestResult = result
         validationState = .finished(result)
+        liveSampleStatus = []
 
         if let response = result.response {
             do {
@@ -317,11 +375,30 @@ final class DriveCkAppViewModel {
     private func clearResultState() {
         latestResult = nil
         reportText = ""
+        liveSampleStatus = []
         if !isRunning {
             activeTarget = nil
             isCancelling = false
             validationState = .idle
         }
+    }
+
+    private func applyProgress(_ snapshot: DriveCkProgressSnapshot) {
+        if snapshot.phase == "Validating" {
+            if liveSampleStatus.isEmpty || liveSampleStatus.count != snapshot.total {
+                liveSampleStatus = Array(repeating: .Untested, count: snapshot.total)
+            }
+            if let sampleIndex = snapshot.sampleIndex,
+               let sampleStatus = snapshot.sampleStatus,
+               liveSampleStatus.indices.contains(sampleIndex)
+            {
+                liveSampleStatus[sampleIndex] = sampleStatus
+            }
+            validationState = .running(snapshot)
+            return
+        }
+
+        validationState = .preparing
     }
 
     private func installWorkspaceObservers() {
