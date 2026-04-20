@@ -38,10 +38,12 @@ final class DriveCkAppViewModel {
     var latestResult: DriveCkValidationExecutionResult?
     var reportText = ""
     var presentedError: DriveCkUserFacingError?
+    var isCancelling = false
 
     private var hasLoaded = false
     private var validationTask: Task<Void, Never>?
     private var cancellationFlag: DriveCkCancellationFlag?
+    private var activeTarget: DriveCkTargetInfo?
     private var workspaceObservers: [NSObjectProtocol] = []
 
     init() {
@@ -50,6 +52,13 @@ final class DriveCkAppViewModel {
 
     var selectedTarget: DriveCkTargetInfo? {
         targets.first(where: { $0.id == selectedTargetID })
+    }
+
+    var displayedTarget: DriveCkTargetInfo? {
+        if let activeTarget {
+            return activeTarget
+        }
+        return selectedTarget
     }
 
     var currentResponse: DriveCkValidationResponse? {
@@ -89,10 +98,18 @@ final class DriveCkAppViewModel {
     var statusLine: String {
         switch validationState {
         case .idle:
-            return "Choose a removable whole-disk target to begin."
+            return selectedTarget == nil
+                ? "Choose a USB whole-disk target to begin."
+                : "DriveCk will request administrator access once, unmount the selected USB disk if needed, and then begin validation."
         case .preparing:
-            return "Preparing validation…"
+            if isCancelling {
+                return "Stopping validation…"
+            }
+            return "Preparing validation and unmounting the selected disk if needed…"
         case let .running(snapshot):
+            if isCancelling {
+                return "Stopping validation… \(snapshot.current)/\(snapshot.total)"
+            }
             return "\(snapshot.phase) \(snapshot.current)/\(snapshot.total)"
         case let .finished(result):
             if let response = result.response {
@@ -106,7 +123,11 @@ final class DriveCkAppViewModel {
     }
 
     var canStartValidation: Bool {
-        !isRunning && selectedTarget != nil && !(selectedTarget?.isMounted ?? true)
+        !isRunning && selectedTarget != nil
+    }
+
+    var canCancelValidation: Bool {
+        isRunning && !isCancelling
     }
 
     var canExportReport: Bool {
@@ -116,9 +137,6 @@ final class DriveCkAppViewModel {
     var inlineError: DriveCkUserFacingError? {
         if let error = latestResult?.error {
             return DriveCkUserFacingError.from(message: error)
-        }
-        if selectedTarget?.isMounted == true {
-            return DriveCkUserFacingError.from(message: "mounted")
         }
         return nil
     }
@@ -134,6 +152,9 @@ final class DriveCkAppViewModel {
     }
 
     func selectTarget(_ id: String?) {
+        guard !isRunning else {
+            return
+        }
         guard selectedTargetID != id else {
             return
         }
@@ -157,6 +178,8 @@ final class DriveCkAppViewModel {
                loadedTargets.contains(where: { $0.id == currentSelection })
             {
                 selectedTargetID = currentSelection
+            } else if isRunning {
+                selectedTargetID = currentSelection
             } else {
                 selectedTargetID = loadedTargets.first?.id
                 if !isRunning {
@@ -172,11 +195,7 @@ final class DriveCkAppViewModel {
 
     func startValidation() {
         guard let target = selectedTarget else {
-            presentedError = DriveCkUserFacingError.from(message: "Choose a removable whole-disk target first.")
-            return
-        }
-        guard !target.isMounted else {
-            presentedError = DriveCkUserFacingError.from(message: "mounted")
+            presentedError = DriveCkUserFacingError.from(message: "Choose a USB whole-disk target first.")
             return
         }
 
@@ -197,19 +216,21 @@ final class DriveCkAppViewModel {
         let cancellationFlag = DriveCkCancellationFlag()
         self.cancellationFlag = cancellationFlag
         clearResultState()
+        isCancelling = false
         validationState = .preparing
 
         let request = DriveCkValidationRequest(
             target: target,
             options: DriveCkValidationOptions(seed: seed)
         )
+        activeTarget = target
 
         validationTask = Task { [weak self] in
             guard let self else {
                 return
             }
             do {
-                let result = try await DriveCkValidationCoordinator.validate(
+                let result = try await DriveCkPrivilegedExecutionService.validate(
                     request: request,
                     onProgress: { [weak self] snapshot in
                         Task { @MainActor in
@@ -228,6 +249,8 @@ final class DriveCkAppViewModel {
                 await MainActor.run {
                     self.validationTask = nil
                     self.cancellationFlag = nil
+                    self.activeTarget = nil
+                    self.isCancelling = false
                     self.validationState = .idle
                     if let userFacing = error as? DriveCkUserFacingError {
                         self.presentedError = userFacing
@@ -240,6 +263,10 @@ final class DriveCkAppViewModel {
     }
 
     func cancelValidation() {
+        guard canCancelValidation else {
+            return
+        }
+        isCancelling = true
         cancellationFlag?.cancel()
     }
 
@@ -269,6 +296,8 @@ final class DriveCkAppViewModel {
     private func finishValidation(_ result: DriveCkValidationExecutionResult) {
         validationTask = nil
         cancellationFlag = nil
+        activeTarget = nil
+        isCancelling = false
         latestResult = result
         validationState = .finished(result)
 
@@ -289,6 +318,8 @@ final class DriveCkAppViewModel {
         latestResult = nil
         reportText = ""
         if !isRunning {
+            activeTarget = nil
+            isCancelling = false
             validationState = .idle
         }
     }
@@ -296,9 +327,6 @@ final class DriveCkAppViewModel {
     private func installWorkspaceObservers() {
         let center = NSWorkspace.shared.notificationCenter
         let names: [Notification.Name] = [
-            NSWorkspace.didMountNotification,
-            NSWorkspace.didUnmountNotification,
-            NSWorkspace.didRenameVolumeNotification,
             NSWorkspace.didWakeNotification,
         ]
         workspaceObservers = names.map { name in

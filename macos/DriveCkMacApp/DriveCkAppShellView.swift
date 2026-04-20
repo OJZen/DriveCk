@@ -51,9 +51,9 @@ struct DriveCkAppShellView: View {
             Section {
                 if viewModel.targets.isEmpty {
                     ContentUnavailableView(
-                        "No removable disks",
+                        "No USB storage disks",
                         systemImage: "externaldrive.badge.questionmark",
-                        description: Text("Plug in a removable disk, unmount it if needed, then refresh.")
+                        description: Text("Plug in a USB storage disk, then refresh. DriveCk can unmount it automatically when validation begins.")
                     )
                     .frame(maxWidth: .infinity, minHeight: 220)
                     .listRowSeparator(.hidden)
@@ -65,10 +65,11 @@ struct DriveCkAppShellView: View {
                     }
                 }
             } header: {
-                Text("Eligible Disks")
+                Text("Eligible USB Disks")
             }
         }
         .listStyle(.sidebar)
+        .disabled(viewModel.isRunning)
         .safeAreaInset(edge: .top) {
             VStack(alignment: .leading, spacing: 8) {
                 Text("DriveCk")
@@ -87,7 +88,7 @@ struct DriveCkAppShellView: View {
 
     @ViewBuilder
     private var detail: some View {
-        if let target = viewModel.selectedTarget {
+        if let target = viewModel.displayedTarget {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
                     heroCard(target: target)
@@ -117,7 +118,7 @@ struct DriveCkAppShellView: View {
             ContentUnavailableView(
                 "No disk selected",
                 systemImage: "externaldrive.badge.plus",
-                description: Text("Refresh the disk list and choose a removable whole-disk target.")
+                description: Text("Refresh the disk list and choose a USB whole-disk target.")
             )
         }
     }
@@ -127,7 +128,7 @@ struct DriveCkAppShellView: View {
             HStack(alignment: .top, spacing: 18) {
                 Image(systemName: target.isUsb ? "externaldrive.badge.connected.to.line.below" : "externaldrive")
                     .font(.system(size: 38, weight: .medium))
-                    .foregroundStyle(target.isMounted ? Color.orange : Color.accentColor)
+                    .foregroundStyle(Color.accentColor)
                     .frame(width: 56, height: 56)
                     .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 18, style: .continuous))
 
@@ -142,7 +143,7 @@ struct DriveCkAppShellView: View {
                         if target.isRemovable {
                             statusBadge(text: "Removable", tint: .purple)
                         }
-                        statusBadge(text: target.isMounted ? "Mounted" : "Ready", tint: target.isMounted ? .orange : .green)
+                        statusBadge(text: "Whole Disk", tint: .green)
                     }
                 }
                 Spacer()
@@ -189,7 +190,7 @@ struct DriveCkAppShellView: View {
                     VStack(alignment: .leading, spacing: 4) {
                         Text("Validation Controls")
                             .font(.headline)
-                        Text("Keep the disk unmounted while DriveCk samples and restores data.")
+                        Text("DriveCk requests administrator access once, unmounts the disk if needed, then samples and restores data.")
                             .font(.subheadline)
                             .foregroundStyle(.secondary)
                     }
@@ -218,14 +219,25 @@ struct DriveCkAppShellView: View {
                             viewModel.startValidation()
                         }
                     } label: {
-                        Label(
-                            viewModel.isRunning ? "Stop Validation" : "Start Validation",
-                            systemImage: viewModel.isRunning ? "stop.fill" : "play.fill"
-                        )
+                        if viewModel.isCancelling {
+                            HStack(spacing: 8) {
+                                ProgressView()
+                                    .controlSize(.small)
+                                Text("Stopping…")
+                            }
+                        } else {
+                            Label(
+                                viewModel.isRunning ? "Stop Validation" : "Start Validation",
+                                systemImage: viewModel.isRunning ? "stop.fill" : "play.fill"
+                            )
+                        }
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.large)
-                    .disabled(!viewModel.isRunning && !viewModel.canStartValidation)
+                    .disabled(
+                        viewModel.isCancelling
+                            || (!viewModel.isRunning && !viewModel.canStartValidation)
+                    )
                 }
 
                 if viewModel.useCustomSeed {
@@ -233,6 +245,13 @@ struct DriveCkAppShellView: View {
                         .font(.footnote)
                         .foregroundStyle(.secondary)
                 }
+
+                Label(
+                    "Start Validation requests administrator approval, unmounts the selected disk if needed, and then continues in one step.",
+                    systemImage: "lock.shield"
+                )
+                .font(.footnote)
+                .foregroundStyle(.secondary)
 
                 Text(viewModel.statusLine)
                     .font(.callout)
@@ -264,7 +283,9 @@ struct DriveCkAppShellView: View {
                     .tint(.accentColor)
                     .scaleEffect(y: 1.25)
 
-                Text("DriveCk updates phase and sample progress in real time. Cancelling preserves any partial report returned by the core.")
+                Text(viewModel.isCancelling
+                    ? "DriveCk is finishing the current disk operation before it can stop safely. The partial report will be preserved."
+                    : "DriveCk updates phase and sample progress in real time. Cancelling preserves any partial report returned by the core.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -455,7 +476,7 @@ struct DriveCkAppShellView: View {
             ContentUnavailableView(
                 "No validation report yet",
                 systemImage: "waveform.path.ecg.rectangle",
-                description: Text("Pick a removable disk, review the safety state, then start a validation run to populate metrics and the report preview.")
+                description: Text("Pick a USB storage disk, review the disk details, then start a validation run to populate metrics and the report preview.")
             )
             .frame(maxWidth: .infinity, minHeight: 260)
         }
@@ -497,7 +518,7 @@ private struct DeviceRow: View {
             Image(systemName: target.isUsb ? "externaldrive.badge.connected.to.line.below" : "externaldrive")
                 .font(.title3)
                 .frame(width: 30)
-                .foregroundStyle(target.isMounted ? Color.orange : Color.accentColor)
+                .foregroundStyle(Color.accentColor)
             VStack(alignment: .leading, spacing: 4) {
                 Text(target.displayName)
                     .font(.headline)
