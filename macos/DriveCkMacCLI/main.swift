@@ -257,32 +257,35 @@ struct DriveCkMacCLI {
             let discovery = DriveCkDiskDiscoveryService()
             let expectedTarget = validationRequest.target
             var currentTarget = try discovery.resolveCurrentTarget(matching: expectedTarget)
-            try? DriveCkPrivilegedHelperIPC.writeHelperOutputJSON(
+            let progressWriter = try DriveCkPrivilegedHelperIPC.JSONLineWriter(url: ipcURLs.progressURL)
+            try? progressWriter.append(
                 DriveCkProgressSnapshot(
                     phase: "Preparing",
                     current: 0,
                     total: 1,
-                    finalUpdate: false
-                ),
-                to: ipcURLs.progressURL
+                    finalUpdate: false,
+                    sampleIndex: nil,
+                    sampleStatus: nil
+                )
             )
             try DriveCkDiskUnmountService.unmount(target: currentTarget)
             currentTarget = try discovery.resolveCurrentTarget(matching: expectedTarget)
-            try? DriveCkPrivilegedHelperIPC.writeHelperOutputJSON(
+            try? progressWriter.append(
                 DriveCkProgressSnapshot(
                     phase: "Preparing",
                     current: 1,
                     total: 1,
-                    finalUpdate: true
-                ),
-                to: ipcURLs.progressURL
+                    finalUpdate: true,
+                    sampleIndex: nil,
+                    sampleStatus: nil
+                )
             )
 
             validationRequest.target = currentTarget
             let result = try DriveCkValidationCoordinator.validateSync(
                 request: validationRequest,
                 onProgress: { snapshot in
-                    try? DriveCkPrivilegedHelperIPC.writeHelperOutputJSON(snapshot, to: ipcURLs.progressURL)
+                    try? progressWriter.append(snapshot)
                 },
                 isCancelled: {
                     FileManager.default.fileExists(atPath: ipcURLs.cancelURL.path)
