@@ -10,6 +10,11 @@ private struct CLIOptions {
     var targetQuery: String?
 }
 
+private struct PrivilegedHelperOptions {
+    var directoryPath: String
+    var requestPayload: String
+}
+
 private struct CLIError: Error {
     var message: String
     var exitCode: Int32
@@ -37,6 +42,10 @@ private final class CLIProgressState: @unchecked Sendable {
 struct DriveCkMacCLI {
     static func run() -> Int32 {
         do {
+            if let helperOptions = try parsePrivilegedHelperOptions(arguments: CommandLine.arguments) {
+                return runPrivilegedHelper(options: helperOptions)
+            }
+
             let options = try parseOptions(arguments: CommandLine.arguments)
             if options.showHelp {
                 printUsage(program: CommandLine.arguments.first ?? "driveck-mac")
@@ -59,13 +68,8 @@ struct DriveCkMacCLI {
 
             let targets = try discovery.loadTargets()
             let target = try resolveTarget(query: query, targets: targets)
-            if target.isMounted {
-                throw CLIError(
-                    message: "Refusing to validate \(target.path) because the disk or one of its volumes is mounted.",
-                    exitCode: 2
-                )
-            }
             try confirmValidation(target: target, assumeYes: options.assumeYes)
+            try DriveCkDiskUnmountService.unmount(target: target)
 
             let isInteractive = isatty(fileno(stderr)) == 1
             let progressState = CLIProgressState()
@@ -132,6 +136,54 @@ struct DriveCkMacCLI {
         }
     }
 
+    private static func parsePrivilegedHelperOptions(arguments: [String]) throws -> PrivilegedHelperOptions? {
+        guard arguments.contains("--privileged-helper") else {
+            return nil
+        }
+
+        var directoryPath: String?
+        var requestPayload: String?
+        var index = 1
+
+        while index < arguments.count {
+            let argument = arguments[index]
+            switch argument {
+            case "--privileged-helper":
+                break
+            case "--privileged-helper-directory":
+                index += 1
+                guard index < arguments.count else {
+                    throw CLIError(message: "--privileged-helper-directory requires a path.", exitCode: 2)
+                }
+                directoryPath = arguments[index]
+            case "--privileged-helper-request":
+                index += 1
+                guard index < arguments.count else {
+                    throw CLIError(message: "--privileged-helper-request requires a payload.", exitCode: 2)
+                }
+                requestPayload = arguments[index]
+            default:
+                throw CLIError(message: "Unknown privileged helper option: \(argument)", exitCode: 2)
+            }
+            index += 1
+        }
+
+        guard let directoryPath else {
+            throw CLIError(
+                message: "Privileged helper mode requires a secure IPC directory.",
+                exitCode: 2
+            )
+        }
+        guard let requestPayload else {
+            throw CLIError(
+                message: "Privileged helper mode requires an embedded request payload.",
+                exitCode: 2
+            )
+        }
+
+        return PrivilegedHelperOptions(directoryPath: directoryPath, requestPayload: requestPayload)
+    }
+
     private static func parseOptions(arguments: [String]) throws -> CLIOptions {
         var options = CLIOptions()
         var index = 1
@@ -182,11 +234,84 @@ struct DriveCkMacCLI {
     private static func resolveTarget(query: String, targets: [DriveCkTargetInfo]) throws -> DriveCkTargetInfo {
         guard let target = targets.first(where: { $0.commandLineAliases.contains(query) }) else {
             throw CLIError(
-                message: "Could not find a removable whole-disk target matching \(query). Use --list to inspect available devices.",
+                message: "Could not find a USB whole-disk target matching \(query). Use --list to inspect available devices.",
                 exitCode: 2
             )
         }
         return target
+    }
+
+    private static func runPrivilegedHelper(options: PrivilegedHelperOptions) -> Int32 {
+        let directoryURL = URL(fileURLWithPath: options.directoryPath, isDirectory: true)
+
+        do {
+            try DriveCkPrivilegedHelperIPC.validateSecureDirectory(at: directoryURL)
+            let ipcURLs = DriveCkPrivilegedHelperIPC.contextURLs(for: directoryURL)
+            let request = try DriveCkPrivilegedHelperIPC.decodeRequestPayload(options.requestPayload)
+            guard request.action == .validate, var validationRequest = request.validationRequest else {
+                throw DriveCkUserFacingError.from(
+                    message: "Privileged helper received an unsupported request."
+                )
+            }
+
+            let discovery = DriveCkDiskDiscoveryService()
+            let expectedTarget = validationRequest.target
+            var currentTarget = try discovery.resolveCurrentTarget(matching: expectedTarget)
+            try? DriveCkPrivilegedHelperIPC.writeHelperOutputJSON(
+                DriveCkProgressSnapshot(
+                    phase: "Preparing",
+                    current: 0,
+                    total: 1,
+                    finalUpdate: false
+                ),
+                to: ipcURLs.progressURL
+            )
+            try DriveCkDiskUnmountService.unmount(target: currentTarget)
+            currentTarget = try discovery.resolveCurrentTarget(matching: expectedTarget)
+            try? DriveCkPrivilegedHelperIPC.writeHelperOutputJSON(
+                DriveCkProgressSnapshot(
+                    phase: "Preparing",
+                    current: 1,
+                    total: 1,
+                    finalUpdate: true
+                ),
+                to: ipcURLs.progressURL
+            )
+
+            validationRequest.target = currentTarget
+            let result = try DriveCkValidationCoordinator.validateSync(
+                request: validationRequest,
+                onProgress: { snapshot in
+                    try? DriveCkPrivilegedHelperIPC.writeHelperOutputJSON(snapshot, to: ipcURLs.progressURL)
+                },
+                isCancelled: {
+                    FileManager.default.fileExists(atPath: ipcURLs.cancelURL.path)
+                }
+            )
+
+            try DriveCkPrivilegedHelperIPC.writeHelperOutputJSON(
+                DriveCkPrivilegedHelperResponse.validation(result),
+                to: ipcURLs.responseURL
+            )
+            return 0
+        } catch let error as DriveCkUserFacingError {
+            try? DriveCkPrivilegedHelperIPC.writeHelperOutputJSON(
+                DriveCkPrivilegedHelperResponse.failure(error),
+                to: DriveCkPrivilegedHelperIPC
+                    .contextURLs(for: URL(fileURLWithPath: options.directoryPath, isDirectory: true))
+                    .responseURL
+            )
+            return 1
+        } catch {
+            let userFacing = DriveCkUserFacingError.from(message: error.localizedDescription)
+            try? DriveCkPrivilegedHelperIPC.writeHelperOutputJSON(
+                DriveCkPrivilegedHelperResponse.failure(userFacing),
+                to: DriveCkPrivilegedHelperIPC
+                    .contextURLs(for: URL(fileURLWithPath: options.directoryPath, isDirectory: true))
+                    .responseURL
+            )
+            return 1
+        }
     }
 
     private static func confirmValidation(target: DriveCkTargetInfo, assumeYes: Bool) throws {
@@ -226,15 +351,15 @@ struct DriveCkMacCLI {
     }
 
     private static func printTargets(_ targets: [DriveCkTargetInfo]) {
-        print("\(pad("PATH", width: 16)) \(pad("SIZE", width: 12)) \(pad("STATE", width: 10)) \(pad("TRANSPORT", width: 12)) MODEL")
+        print("\(pad("PATH", width: 16)) \(pad("SIZE", width: 12)) \(pad("TRANSPORT", width: 12)) MODEL")
         guard !targets.isEmpty else {
-            print("No removable whole-disk devices are currently available.")
+            print("No USB whole-disk devices are currently available.")
             return
         }
 
         for target in targets {
             print(
-                "\(pad(target.path, width: 16)) \(pad(driveCkFormatBytes(target.sizeBytes), width: 12)) \(pad(target.isMounted ? "mounted" : "ready", width: 10)) \(pad(target.transportLabel, width: 12)) \(target.displayName)"
+                "\(pad(target.path, width: 16)) \(pad(driveCkFormatBytes(target.sizeBytes), width: 12)) \(pad(target.transportLabel, width: 12)) \(target.displayName)"
             )
         }
     }
@@ -252,7 +377,7 @@ struct DriveCkMacCLI {
               \(program) --yes --output report.txt /dev/rdisk2
 
             Options:
-              -l, --list          List removable whole-disk targets.
+              -l, --list          List USB whole-disk targets.
               -o, --output FILE   Save the text report to FILE.
               -y, --yes           Skip the destructive-operation confirmation.
                   --seed N        Use a fixed seed for deterministic sample data.

@@ -11,29 +11,8 @@ struct DriveCkDiskDiscoveryService {
         if eligibleWholeDisks.isEmpty {
             return []
         }
-        let apfsPhysicalRoots = try apfsContainerPhysicalRoots()
-        let deviceNames = try FileManager.default.contentsOfDirectory(atPath: "/dev")
-            .compactMap(canonicalDiskName(from:))
-        let uniqueNames = Array(Set(deviceNames)).sorted()
-
-        var descriptions: [String: [String: Any]] = [:]
-        var mountedWholeDisks = Set<String>()
-
-        for name in uniqueNames {
-            guard let description = description(for: name, session: session) else {
-                continue
-            }
-            descriptions[name] = description
-            if !boolValue(for: description, key: kDADiskDescriptionMediaWholeKey as String),
-               hasMountedVolume(description),
-               let root = rootDiskName(from: name)
-            {
-                mountedWholeDisks.formUnion(physicalRoots(for: root, apfsPhysicalRoots: apfsPhysicalRoots))
-            }
-        }
-
         let targets = eligibleWholeDisks.compactMap { name -> DriveCkTargetInfo? in
-            guard let description = descriptions[name],
+            guard let description = description(for: name, session: session),
                   boolValue(for: description, key: kDADiskDescriptionMediaWholeKey as String)
             else {
                 return nil
@@ -53,22 +32,40 @@ struct DriveCkDiskDiscoveryService {
             let preferredPath = rawDevicePath(for: name)
             let blockSize = uint64Value(for: description, key: kDADiskDescriptionMediaBlockSizeKey as String)
             let mediaName = stringValue(for: description, key: kDADiskDescriptionMediaNameKey as String)
-            let mounted = mountedWholeDisks.contains(name) || hasMountedVolume(description)
+            let deviceVendor = stringValue(for: description, key: kDADiskDescriptionDeviceVendorKey as String)
+            let deviceModel = stringValue(for: description, key: kDADiskDescriptionDeviceModelKey as String)
+            let devicePath = stringValue(for: description, key: kDADiskDescriptionDevicePathKey as String)
+            let busPath = stringValue(for: description, key: kDADiskDescriptionBusPathKey as String)
+            let isUsb = looksLikeUSBStorageDevice(
+                transport: transport,
+                devicePath: devicePath,
+                busPath: busPath
+            )
+            guard isUsb else {
+                return nil
+            }
 
             return DriveCkTargetInfo(
                 kind: .BlockDevice,
                 path: preferredPath,
                 name: name,
-                vendor: "",
-                model: mediaName.isEmpty ? name : mediaName,
+                vendor: deviceVendor,
+                model: firstNonEmpty([deviceModel, mediaName, name]),
                 transport: transport.isEmpty ? (isRemovable ? "removable" : "external") : transport,
                 sizeBytes: size,
                 logicalBlockSize: blockSize == 0 ? 4096 : UInt32(clamping: blockSize),
+                deviceGUID: dataStringValue(for: description, key: kDADiskDescriptionDeviceGUIDKey as String),
+                mediaUUID: uuidStringValue(for: description, key: kDADiskDescriptionMediaUUIDKey as String),
+                devicePath: devicePath,
+                busPath: busPath,
                 isBlockDevice: true,
                 isRemovable: isRemovable,
-                isUsb: transport.contains("usb"),
-                isMounted: mounted,
-                directIo: true
+                isUsb: isUsb,
+                // Mounted state is resolved inside the privileged path right before
+                // disk operations so the GUI does not need removable-volume metadata.
+                isMounted: false,
+                // We only know whether uncached I/O is active after opening the raw device.
+                directIo: false
             )
         }
 
@@ -79,6 +76,32 @@ struct DriveCkDiskDiscoveryService {
         }
 
         return []
+    }
+
+    func resolveCurrentTarget(matching expected: DriveCkTargetInfo) throws -> DriveCkTargetInfo {
+        let currentTargets = try loadTargets()
+        guard let current = currentTargets.first(where: { $0.name == expected.name || $0.path == expected.path }) else {
+            throw DriveCkUserFacingError(
+                title: "Disk changed before authorization",
+                message: "The selected disk is no longer available at its original device node.",
+                suggestion: "Refresh the disk list, reselect the disk, and start again.",
+                detail: "Expected: \(expected.privilegedIdentitySummary)"
+            )
+        }
+
+        guard current.matchesPrivilegedIdentity(of: expected) else {
+            throw DriveCkUserFacingError(
+                title: "Disk changed before authorization",
+                message: "The disk at \(expected.name) no longer matches the device you selected before approving administrator access.",
+                suggestion: "Refresh the disk list and start the action again so DriveCk can verify the correct disk.",
+                detail: """
+                Expected: \(expected.privilegedIdentitySummary)
+                Current: \(current.privilegedIdentitySummary)
+                """
+            )
+        }
+
+        return current
     }
 
     private func description(for bsdName: String, session: DASession) -> [String: Any]? {
@@ -102,36 +125,6 @@ struct DriveCkDiskDiscoveryService {
             return allDisks.compactMap(rootDiskName(from:))
         }
         return []
-    }
-
-    private func apfsContainerPhysicalRoots() throws -> [String: Set<String>] {
-        let plist = try runDiskutilPlist(arguments: ["apfs", "list", "-plist"])
-        guard let containers = plist["Containers"] as? [[String: Any]] else {
-            return [:]
-        }
-
-        var mapping: [String: Set<String>] = [:]
-        for container in containers {
-            guard let containerReference = container["ContainerReference"] as? String else {
-                continue
-            }
-
-            let physicalRoots = ((container["PhysicalStores"] as? [[String: Any]]) ?? [])
-                .compactMap { store in
-                    (store["DeviceIdentifier"] as? String).flatMap(rootDiskName(from:))
-                }
-            if !physicalRoots.isEmpty {
-                mapping[containerReference] = Set(physicalRoots)
-            }
-        }
-        return mapping
-    }
-
-    private func physicalRoots(
-        for diskName: String,
-        apfsPhysicalRoots: [String: Set<String>]
-    ) -> Set<String> {
-        apfsPhysicalRoots[diskName] ?? [diskName]
     }
 
     private func runDiskutilPlist(arguments: [String]) throws -> [String: Any] {
@@ -164,15 +157,27 @@ struct DriveCkDiskDiscoveryService {
         return dictionary
     }
 
-    private func canonicalDiskName(from name: String) -> String? {
-        guard name.hasPrefix("disk") || name.hasPrefix("rdisk") else {
-            return nil
+    private func looksLikeUSBStorageDevice(
+        transport: String,
+        devicePath: String,
+        busPath: String
+    ) -> Bool {
+        let normalizedTransport = transport.lowercased()
+        if normalizedTransport.contains("usb") {
+            return true
         }
-        let normalized = name.hasPrefix("rdisk") ? String(name.dropFirst()) : name
-        guard rootDiskName(from: normalized) != nil else {
-            return nil
+
+        let normalizedDevicePath = devicePath.lowercased()
+        if normalizedDevicePath.contains("usb") {
+            return true
         }
-        return normalized
+
+        let normalizedBusPath = busPath.lowercased()
+        if normalizedBusPath.contains("usb") {
+            return true
+        }
+
+        return false
     }
 
     private func rootDiskName(from name: String) -> String? {
@@ -223,7 +228,23 @@ struct DriveCkDiskDiscoveryService {
         return 0
     }
 
-    private func hasMountedVolume(_ description: [String: Any]) -> Bool {
-        description[kDADiskDescriptionVolumePathKey as String] != nil
+    private func uuidStringValue(for description: [String: Any], key: String) -> String? {
+        if let value = description[key] as? UUID {
+            return value.uuidString.lowercased()
+        }
+        return nil
+    }
+
+    private func dataStringValue(for description: [String: Any], key: String) -> String? {
+        guard let data = description[key] as? Data, !data.isEmpty else {
+            return nil
+        }
+        return data.map { String(format: "%02x", $0) }.joined()
+    }
+
+    private func firstNonEmpty(_ values: [String]) -> String {
+        values
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { !$0.isEmpty }) ?? ""
     }
 }

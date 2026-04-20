@@ -6,6 +6,16 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXContainerItemProxy section */
+		A00000000000000000000801 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A00000000000000000000500 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = A00000000000000000000402;
+			remoteInfo = DriveCkMacCLI;
+		};
+/* End PBXContainerItemProxy section */
+
 /* Begin PBXFileReference section */
 		A00000000000000000000201 /* DriveCkMacApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DriveCkMacApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A00000000000000000000202 /* driveck-mac */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "driveck-mac"; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -79,7 +89,6 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = A00000000000000000000602 /* Build configuration list for PBXNativeTarget "DriveCkMacApp" */;
 			buildPhases = (
-				A00000000000000000000301 /* Build Rust FFI */,
 				A00000000000000000000302 /* Sources */,
 				A00000000000000000000303 /* Frameworks */,
 				A00000000000000000000304 /* Resources */,
@@ -87,6 +96,7 @@
 			buildRules = (
 			);
 			dependencies = (
+				A00000000000000000000802 /* PBXTargetDependency */,
 			);
 			fileSystemSynchronizedGroups = (
 				A00000000000000000000101 /* DriveCkMacShared */,
@@ -171,22 +181,6 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		A00000000000000000000301 /* Build Rust FFI */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputPaths = (
-			);
-			name = "Build Rust FFI";
-			outputPaths = (
-				"$(PROJECT_DIR)/Build/Rust/$(CONFIGURATION)/libdriveck_ffi.a",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/bash;
-			shellScript = "\"${PROJECT_DIR}/Scripts/build-rust-ffi.sh\"";
-			showEnvVarsInLog = 0;
-		};
 		A00000000000000000000305 /* Build Rust FFI */ = {
 			isa = PBXShellScriptBuildPhase;
 			buildActionMask = 2147483647;
@@ -196,7 +190,6 @@
 			);
 			name = "Build Rust FFI";
 			outputPaths = (
-				"$(PROJECT_DIR)/Build/Rust/$(CONFIGURATION)/libdriveck_ffi.a",
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/bash;
@@ -221,6 +214,14 @@
 			runOnlyForDeploymentPostprocessing = 0;
 		};
 /* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A00000000000000000000802 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = A00000000000000000000402 /* DriveCkMacCLI */;
+			targetProxy = A00000000000000000000801 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
 
 /* Begin XCBuildConfiguration section */
 		A00000000000000000000701 /* Debug */ = {
@@ -254,11 +255,13 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_ALLOWED = YES;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CONFIGURATION_BUILD_DIR = "$(PROJECT_DIR)/Build/$(CONFIGURATION)";
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = WGK4N3VX88;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
 				ENABLE_PREVIEWS = YES;
@@ -286,11 +289,13 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_ALLOWED = YES;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CONFIGURATION_BUILD_DIR = "$(PROJECT_DIR)/Build/$(CONFIGURATION)";
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = WGK4N3VX88;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = NO;
 				ENABLE_PREVIEWS = YES;
@@ -316,9 +321,11 @@
 		A00000000000000000000705 /* Debug */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_ALLOWED = YES;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CONFIGURATION_BUILD_DIR = "$(PROJECT_DIR)/Build/$(CONFIGURATION)";
+				DEVELOPMENT_TEAM = WGK4N3VX88;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				LIBRARY_SEARCH_PATHS = (
@@ -329,6 +336,7 @@
 					"$(inherited)",
 					"-ldriveck_ffi",
 				);
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.ojzen.driveck.macos.cli;
 				PRODUCT_NAME = "driveck-mac";
 				SUPPORTED_PLATFORMS = macosx;
 			};
@@ -337,9 +345,11 @@
 		A00000000000000000000706 /* Release */ = {
 			isa = XCBuildConfiguration;
 			buildSettings = {
-				CODE_SIGNING_ALLOWED = NO;
+				CODE_SIGNING_ALLOWED = YES;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CONFIGURATION_BUILD_DIR = "$(PROJECT_DIR)/Build/$(CONFIGURATION)";
+				DEVELOPMENT_TEAM = WGK4N3VX88;
 				ENABLE_USER_SCRIPT_SANDBOXING = NO;
 				GENERATE_INFOPLIST_FILE = NO;
 				LIBRARY_SEARCH_PATHS = (
@@ -350,6 +360,7 @@
 					"$(inherited)",
 					"-ldriveck_ffi",
 				);
+				PRODUCT_BUNDLE_IDENTIFIER = io.github.ojzen.driveck.macos.cli;
 				PRODUCT_NAME = "driveck-mac";
 				SUPPORTED_PLATFORMS = macosx;
 			};

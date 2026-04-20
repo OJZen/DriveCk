@@ -60,6 +60,10 @@ struct DriveCkTargetInfo: Codable, Hashable, Identifiable, Sendable {
     var transport: String
     var sizeBytes: UInt64
     var logicalBlockSize: UInt32
+    var deviceGUID: String?
+    var mediaUUID: String?
+    var devicePath: String?
+    var busPath: String?
     var isBlockDevice: Bool
     var isRemovable: Bool
     var isUsb: Bool
@@ -81,11 +85,7 @@ struct DriveCkTargetInfo: Codable, Hashable, Identifiable, Sendable {
         if !transportLabel.isEmpty {
             parts.append(transportLabel)
         }
-        if isMounted {
-            parts.append("Mounted")
-        } else {
-            parts.append("Ready")
-        }
+        parts.append("Whole disk")
         return parts.joined(separator: " · ")
     }
 
@@ -111,6 +111,98 @@ struct DriveCkTargetInfo: Codable, Hashable, Identifiable, Sendable {
         ]
     }
 
+    var privilegedIdentitySummary: String {
+        [
+            "name=\(name)",
+            "path=\(path)",
+            nonEmpty(vendor).map { "vendor=\($0)" },
+            nonEmpty(model).map { "model=\($0)" },
+            nonEmpty(transport).map { "transport=\($0)" },
+            "size_bytes=\(sizeBytes)",
+            "logical_block_size=\(logicalBlockSize)",
+            nonEmpty(deviceGUID).map { "device_guid=\($0)" },
+            nonEmpty(mediaUUID).map { "media_uuid=\($0)" },
+            nonEmpty(devicePath).map { "device_path=\($0)" },
+            nonEmpty(busPath).map { "bus_path=\($0)" },
+        ]
+        .compactMap { $0 }
+        .joined(separator: ", ")
+    }
+
+    func matchesPrivilegedIdentity(of other: DriveCkTargetInfo) -> Bool {
+        guard kind == other.kind,
+              isBlockDevice == other.isBlockDevice,
+              isRemovable == other.isRemovable,
+              isUsb == other.isUsb,
+              sizeBytes == other.sizeBytes,
+              logicalBlockSize == other.logicalBlockSize
+        else {
+            return false
+        }
+
+        guard strongIdentityMatches(deviceGUID, other.deviceGUID),
+              strongIdentityMatches(mediaUUID, other.mediaUUID),
+              strongIdentityMatches(devicePath, other.devicePath),
+              strongIdentityMatches(busPath, other.busPath)
+        else {
+            return false
+        }
+
+        guard softIdentityMatches(vendor, other.vendor),
+              softIdentityMatches(model, other.model),
+              softIdentityMatches(transport, other.transport)
+        else {
+            return false
+        }
+
+        if hasStrongIdentity || other.hasStrongIdentity {
+            return true
+        }
+
+        return path == other.path && name == other.name
+    }
+
+    private var hasStrongIdentity: Bool {
+        nonEmpty(deviceGUID) != nil
+            || nonEmpty(mediaUUID) != nil
+            || nonEmpty(devicePath) != nil
+            || nonEmpty(busPath) != nil
+    }
+
+    private func nonEmpty(_ value: String?) -> String? {
+        let normalized = value?.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let normalized, !normalized.isEmpty else {
+            return nil
+        }
+        return normalized
+    }
+
+    private func strongIdentityMatches(_ lhs: String?, _ rhs: String?) -> Bool {
+        let left = normalizedIdentityValue(lhs)
+        let right = normalizedIdentityValue(rhs)
+        switch (left, right) {
+        case (nil, nil):
+            return true
+        case let (.some(left), .some(right)):
+            return left == right
+        default:
+            return false
+        }
+    }
+
+    private func softIdentityMatches(_ lhs: String, _ rhs: String) -> Bool {
+        let left = normalizedIdentityValue(lhs)
+        let right = normalizedIdentityValue(rhs)
+        guard let left, let right else {
+            return true
+        }
+        return left == right
+    }
+
+    private func normalizedIdentityValue(_ value: String?) -> String? {
+        nonEmpty(value)?.lowercased()
+    }
+
     enum CodingKeys: String, CodingKey {
         case kind
         case path
@@ -120,6 +212,10 @@ struct DriveCkTargetInfo: Codable, Hashable, Identifiable, Sendable {
         case transport
         case sizeBytes = "size_bytes"
         case logicalBlockSize = "logical_block_size"
+        case deviceGUID = "device_guid"
+        case mediaUUID = "media_uuid"
+        case devicePath = "device_path"
+        case busPath = "bus_path"
         case isBlockDevice = "is_block_device"
         case isRemovable = "is_removable"
         case isUsb = "is_usb"
@@ -254,7 +350,7 @@ struct DriveCkFFIEnvelope<T: Decodable & Sendable>: Decodable, Sendable {
     var error: String?
 }
 
-struct DriveCkProgressSnapshot: Hashable, Sendable {
+struct DriveCkProgressSnapshot: Codable, Hashable, Sendable {
     var phase: String
     var current: Int
     var total: Int
@@ -338,7 +434,7 @@ struct DriveCkTimingSummary: Hashable, Sendable {
     }
 }
 
-struct DriveCkUserFacingError: Error, Identifiable, Hashable, Sendable {
+struct DriveCkUserFacingError: Codable, Error, Identifiable, Hashable, Sendable {
     var id = UUID()
     var title: String
     var message: String
@@ -359,7 +455,7 @@ struct DriveCkUserFacingError: Error, Identifiable, Hashable, Sendable {
             return .init(
                 title: "Disk is still mounted",
                 message: "The selected disk or one of its volumes is mounted and cannot be validated safely.",
-                suggestion: "Eject or unmount every volume on the disk, then refresh and try again.",
+                suggestion: "Close apps using that disk and try again. DriveCk will unmount it automatically after administrator approval when macOS allows it.",
                 detail: detail ?? message
             )
         }
