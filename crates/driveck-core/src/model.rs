@@ -135,6 +135,8 @@ pub struct ProgressUpdate {
     pub phase: &'static str,
     pub current: usize,
     pub total: usize,
+    pub sample_index: Option<usize>,
+    pub sample_status: Option<SampleStatus>,
     pub final_update: bool,
 }
 

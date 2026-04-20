@@ -168,19 +168,12 @@ pub fn validate_target_with_callbacks(
     })?;
 
     let order = build_sample_order(report.seed);
-    for (slot, sample_index) in order.into_iter().enumerate() {
+    for sample_index in order {
         if is_cancelled(cancel) {
             report.cancelled = true;
             break;
         }
 
-        emit_progress(
-            &mut progress,
-            "Validating",
-            slot + 1,
-            DRIVECK_SAMPLE_COUNT,
-            false,
-        );
         let offset = report.sample_offsets[sample_index];
         let status = {
             let mut read_timings = Some(&mut report.read_timings);
@@ -200,6 +193,15 @@ pub fn validate_target_with_callbacks(
         report.sample_status[sample_index] = status;
         count_status(&mut report, status);
         report.completed_samples += 1;
+        emit_progress(
+            &mut progress,
+            "Validating",
+            report.completed_samples,
+            DRIVECK_SAMPLE_COUNT,
+            Some(sample_index),
+            Some(status),
+            false,
+        );
 
         if status == SampleStatus::RestoreError {
             break;
@@ -211,6 +213,8 @@ pub fn validate_target_with_callbacks(
         "Validating",
         report.completed_samples,
         DRIVECK_SAMPLE_COUNT,
+        None,
+        None,
         true,
     );
     report.completed_all_samples =
@@ -259,6 +263,8 @@ fn emit_progress(
     phase: &'static str,
     current: usize,
     total: usize,
+    sample_index: Option<usize>,
+    sample_status: Option<SampleStatus>,
     final_update: bool,
 ) {
     if let Some(observer) = progress.as_deref_mut() {
@@ -266,6 +272,8 @@ fn emit_progress(
             phase,
             current,
             total,
+            sample_index,
+            sample_status,
             final_update,
         });
     }
