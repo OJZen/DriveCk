@@ -20,15 +20,24 @@ impl OpenedTarget {
         options
             .read(true)
             .write(true)
-            .custom_flags(libc::O_CLOEXEC | libc::O_SYNC | libc::O_EXLOCK | libc::O_NONBLOCK);
+            // We already issue explicit durability barriers through flush_target() when the
+            // validation path requires them. Keeping O_SYNC here forces every pwrite() to
+            // synchronously drain on top of those barriers and makes the macOS fast path
+            // effectively unreachable in practice.
+            .custom_flags(libc::O_CLOEXEC | libc::O_EXLOCK | libc::O_NONBLOCK);
 
         let file = options
             .open(&target.path)
             .map_err(|error| map_open_error(target, error))?;
         let fd = file.as_raw_fd();
-        clear_nonblocking(fd).map_err(|error| {
-            DriveCkError::io(format!("Failed to configure {}", target.path), error)
-        })?;
+        if let Err(error) = clear_nonblocking(fd) {
+            if !can_tolerate_nonblocking_configuration_error(&error) {
+                return Err(DriveCkError::io(
+                    format!("Failed to configure {}", target.path),
+                    error,
+                ));
+            }
+        }
         let direct_io_used = unsafe { libc::fcntl(fd, libc::F_NOCACHE, 1) } == 0;
 
         Ok(Self {
@@ -148,6 +157,17 @@ fn clear_nonblocking(fd: i32) -> io::Result<()> {
     }
 }
 
+fn can_tolerate_nonblocking_configuration_error(error: &io::Error) -> bool {
+    matches!(
+        error.raw_os_error(),
+        Some(code)
+            if code == libc::EINVAL
+                || code == libc::ENOTTY
+                || code == libc::ENOTSUP
+                || code == libc::EOPNOTSUPP
+    )
+}
+
 fn map_open_error(target: &TargetInfo, error: io::Error) -> DriveCkError {
     match error.raw_os_error() {
         Some(code) if code == libc::EWOULDBLOCK || code == libc::EAGAIN => {
@@ -179,7 +199,9 @@ fn positioned_read(fd: i32, buffer: &mut [u8], mut offset: u64) -> io::Result<()
         };
         if result < 0 {
             let error = io::Error::last_os_error();
-            if error.kind() == io::ErrorKind::Interrupted {
+            if error.kind() == io::ErrorKind::Interrupted
+                || error.kind() == io::ErrorKind::WouldBlock
+            {
                 continue;
             }
             return Err(error);
@@ -210,7 +232,9 @@ fn positioned_write(fd: i32, buffer: &[u8], mut offset: u64) -> io::Result<()> {
         };
         if result < 0 {
             let error = io::Error::last_os_error();
-            if error.kind() == io::ErrorKind::Interrupted {
+            if error.kind() == io::ErrorKind::Interrupted
+                || error.kind() == io::ErrorKind::WouldBlock
+            {
                 continue;
             }
             return Err(error);
@@ -249,4 +273,24 @@ fn is_partition_name(name: &str) -> bool {
 fn parse_disk_suffix(name: &str) -> Option<&str> {
     name.strip_prefix("disk")
         .or_else(|| name.strip_prefix("rdisk"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::can_tolerate_nonblocking_configuration_error;
+    use std::io;
+
+    #[test]
+    fn tolerates_known_nonblocking_configuration_errors() {
+        for code in [libc::EINVAL, libc::ENOTTY, libc::ENOTSUP, libc::EOPNOTSUPP] {
+            let error = io::Error::from_raw_os_error(code);
+            assert!(can_tolerate_nonblocking_configuration_error(&error));
+        }
+    }
+
+    #[test]
+    fn rejects_unrelated_configuration_errors() {
+        let error = io::Error::from_raw_os_error(libc::EACCES);
+        assert!(!can_tolerate_nonblocking_configuration_error(&error));
+    }
 }

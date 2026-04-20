@@ -7,9 +7,9 @@ use std::{
 };
 
 use crate::{
-    CancelObserver, DRIVECK_MAX_REGION_SIZE, DRIVECK_MIN_REGION_SIZE, DRIVECK_SAMPLE_COUNT,
-    ProgressObserver, ProgressUpdate, SampleStatus, TargetInfo, TimingSeries, ValidationOptions,
-    ValidationReport, format_bytes, platform::OpenedTarget, sample_status_name,
+    CancelObserver, DRIVECK_MIN_REGION_SIZE, DRIVECK_SAMPLE_COUNT, ProgressObserver,
+    ProgressUpdate, SampleStatus, TargetInfo, TimingSeries, ValidationOptions, ValidationReport,
+    format_bytes, platform::OpenedTarget,
 };
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -141,22 +141,11 @@ pub fn validate_target_with_callbacks(
     let alignment = DRIVECK_MIN_REGION_SIZE.max(u64::from(target.logical_block_size.max(4096)));
     let opened =
         OpenedTarget::open(target).map_err(|error| ValidationFailure::new(error.message, None))?;
-
-    let region_size = match calibrate_region_size(
-        &opened,
-        target.size_bytes,
-        alignment,
-        report.seed,
-        &mut progress,
-        cancel,
-    ) {
-        Ok(region_size) => region_size,
-        Err(message) => {
-            report.cancelled = message == "Validation cancelled.";
-            report.finished_at = current_timestamp();
-            return Err(ValidationFailure::new(message, Some(report)));
-        }
-    };
+    let direct_io_active = effective_direct_io(opened.direct_io_used());
+    let region_size = default_region_size(alignment, target.size_bytes).map_err(|message| {
+        report.finished_at = current_timestamp();
+        ValidationFailure::new(message, Some(report.clone()))
+    })?;
 
     report.region_size_bytes = region_size as u64;
     for index in 0..DRIVECK_SAMPLE_COUNT {
@@ -198,6 +187,7 @@ pub fn validate_target_with_callbacks(
             let mut write_timings = Some(&mut report.write_timings);
             probe_region(
                 &opened,
+                direct_io_active,
                 offset,
                 region_size,
                 report.seed,
@@ -285,14 +275,7 @@ fn is_cancelled(cancel: Option<&dyn CancelObserver>) -> bool {
     cancel.is_some_and(|token| token.is_cancelled())
 }
 
-fn calibrate_region_size(
-    opened: &OpenedTarget,
-    target_size: u64,
-    alignment: u64,
-    seed: u64,
-    progress: &mut Option<&mut dyn ProgressObserver>,
-    cancel: Option<&dyn CancelObserver>,
-) -> Result<usize, String> {
+fn default_region_size(alignment: u64, target_size: u64) -> Result<usize, String> {
     let minimum_region = DRIVECK_MIN_REGION_SIZE.max(alignment).next_power_of_two();
     if target_size < minimum_region {
         return Err(format!(
@@ -300,80 +283,11 @@ fn calibrate_region_size(
             format_bytes(minimum_region)
         ));
     }
-
-    let mut chosen = minimum_region;
-    let mut candidate = minimum_region;
-    let mut step = 0usize;
-    let mut max_steps = 1usize;
-    let mut probe = minimum_region;
-    while probe < DRIVECK_MAX_REGION_SIZE && probe < target_size {
-        max_steps += 1;
-        probe <<= 1;
-    }
-
-    while candidate <= DRIVECK_MAX_REGION_SIZE && candidate <= target_size {
-        if is_cancelled(cancel) {
-            return Err("Validation cancelled.".into());
-        }
-
-        step += 1;
-        emit_progress(progress, "Calibrating", step, max_steps, false);
-
-        if target_size / candidate < DRIVECK_SAMPLE_COUNT as u64 {
-            break;
-        }
-
-        let mut buffers = ProbeBuffers::new(alignment as usize, candidate as usize)
-            .map_err(|error| error.message)?;
-        let offset = align_down(target_size - candidate, alignment);
-        let status = probe_region(
-            opened,
-            offset,
-            candidate as usize,
-            seed,
-            DRIVECK_SAMPLE_COUNT,
-            &mut buffers,
-            &mut None,
-            &mut None,
-        );
-        if status != SampleStatus::Ok {
-            emit_progress(progress, "Calibrating", step, max_steps, true);
-            if let Some(message) = calibration_failure_message(candidate, minimum_region, status) {
-                return Err(message);
-            }
-            break;
-        }
-
-        chosen = candidate;
-        if candidate == DRIVECK_MAX_REGION_SIZE {
-            break;
-        }
-        candidate <<= 1;
-    }
-
-    emit_progress(progress, "Calibrating", step, max_steps, true);
-    Ok(chosen as usize)
+    Ok(minimum_region as usize)
 }
 
-fn calibration_failure_message(
-    candidate: u64,
-    minimum_region: u64,
-    status: SampleStatus,
-) -> Option<String> {
-    if status == SampleStatus::RestoreError {
-        return Some(format!(
-            "Calibration probe failed while restoring original data on {} writes. Validation stopped to avoid leaving sampled data modified.",
-            format_bytes(candidate)
-        ));
-    }
-
-    (candidate == minimum_region).then(|| {
-        format!(
-            "Initial calibration probe failed on {} writes ({}).",
-            format_bytes(candidate),
-            sample_status_name(status)
-        )
-    })
+fn effective_direct_io(opened_direct_io: bool) -> bool {
+    opened_direct_io
 }
 
 fn recorded_read(
@@ -410,6 +324,7 @@ fn recorded_write(
 
 fn probe_region(
     opened: &OpenedTarget,
+    direct_io_active: bool,
     offset: u64,
     size: usize,
     seed: u64,
@@ -418,8 +333,8 @@ fn probe_region(
     read_timings: &mut Option<&mut TimingSeries>,
     write_timings: &mut Option<&mut TimingSeries>,
 ) -> SampleStatus {
-    let drop_cache_before_read = !opened.direct_io_used();
-    let flush_after_write = !opened.direct_io_used();
+    let drop_cache_before_read = !direct_io_active;
+    let flush_after_write = !direct_io_active;
 
     if recorded_read(
         opened,
@@ -665,7 +580,7 @@ mod tests {
         DRIVECK_MIN_REGION_SIZE, DRIVECK_SAMPLE_COUNT, ValidationOptions, validate_target,
     };
 
-    use super::{SampleStatus, TargetInfo, build_sample_order, calibration_failure_message};
+    use super::{TargetInfo, build_sample_order, default_region_size, effective_direct_io};
 
     #[test]
     fn sample_order_preserves_front_and_back_priority() {
@@ -679,37 +594,27 @@ mod tests {
     }
 
     #[test]
-    fn calibration_restore_errors_abort_even_above_minimum_region() {
-        let message = calibration_failure_message(
-            128 * 1024,
-            DRIVECK_MIN_REGION_SIZE,
-            SampleStatus::RestoreError,
-        )
-        .expect("restore errors must stop calibration");
-        assert!(message.contains("restoring original data"));
-    }
-
-    #[test]
-    fn calibration_can_fall_back_after_non_restore_failure_on_larger_region() {
-        assert!(
-            calibration_failure_message(
-                128 * 1024,
-                DRIVECK_MIN_REGION_SIZE,
-                SampleStatus::VerifyMismatch
-            )
-            .is_none()
+    fn default_region_size_uses_4k_floor() {
+        assert_eq!(
+            default_region_size(512, DRIVECK_MIN_REGION_SIZE * DRIVECK_SAMPLE_COUNT as u64)
+                .expect("4 KB floor should be valid"),
+            DRIVECK_MIN_REGION_SIZE as usize
         );
     }
 
     #[test]
-    fn calibration_minimum_probe_failures_remain_fatal() {
-        let message = calibration_failure_message(
-            DRIVECK_MIN_REGION_SIZE,
-            DRIVECK_MIN_REGION_SIZE,
-            SampleStatus::VerifyMismatch,
-        )
-        .expect("minimum-size probe failures must abort");
-        assert!(message.contains("Initial calibration probe failed"));
+    fn default_region_size_respects_large_block_sizes() {
+        assert_eq!(
+            default_region_size(8192, 8192 * DRIVECK_SAMPLE_COUNT as u64)
+                .expect("aligned default region should be valid"),
+            8192
+        );
+    }
+
+    #[test]
+    fn only_confirmed_direct_io_enables_fast_path() {
+        assert!(effective_direct_io(true));
+        assert!(!effective_direct_io(false));
     }
 
     #[test]
