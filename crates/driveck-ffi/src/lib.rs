@@ -13,6 +13,8 @@ type ProgressCallback = Option<
         current: usize,
         total: usize,
         final_update: bool,
+        sample_index: isize,
+        sample_status: i32,
         user_data: *mut c_void,
     ),
 >;
@@ -52,10 +54,24 @@ impl ProgressObserver for FfiProgress {
                     update.current,
                     update.total,
                     update.final_update,
+                    update.sample_index.map(|index| index as isize).unwrap_or(-1),
+                    sample_status_code(update.sample_status),
                     self.user_data,
                 );
             }
         }
+    }
+}
+
+fn sample_status_code(status: Option<driveck_core::SampleStatus>) -> i32 {
+    match status {
+        Some(driveck_core::SampleStatus::Untested) => 0,
+        Some(driveck_core::SampleStatus::Ok) => 1,
+        Some(driveck_core::SampleStatus::ReadError) => 2,
+        Some(driveck_core::SampleStatus::WriteError) => 3,
+        Some(driveck_core::SampleStatus::VerifyMismatch) => 4,
+        Some(driveck_core::SampleStatus::RestoreError) => 5,
+        None => -1,
     }
 }
 

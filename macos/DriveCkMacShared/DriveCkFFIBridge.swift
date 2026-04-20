@@ -1,7 +1,7 @@
 import Foundation
 
 private typealias DriveCkFFIProgressCallback =
-    @convention(c) (UnsafePointer<CChar>?, Int, Int, Bool, UnsafeMutableRawPointer?) -> Void
+    @convention(c) (UnsafePointer<CChar>?, Int, Int, Bool, Int, Int32, UnsafeMutableRawPointer?) -> Void
 private typealias DriveCkFFICancelCallback =
     @convention(c) (UnsafeMutableRawPointer?) -> Bool
 
@@ -103,7 +103,7 @@ enum DriveCkFFIBridge {
         return String(cString: pointer)
     }
 
-    private static let progressCallback: DriveCkFFIProgressCallback = { phase, current, total, finalUpdate, userData in
+    private static let progressCallback: DriveCkFFIProgressCallback = { phase, current, total, finalUpdate, sampleIndex, sampleStatus, userData in
         guard let userData else {
             return
         }
@@ -114,7 +114,9 @@ enum DriveCkFFIBridge {
                 phase: phaseText,
                 current: current,
                 total: total,
-                finalUpdate: finalUpdate
+                finalUpdate: finalUpdate,
+                sampleIndex: sampleIndex >= 0 ? sampleIndex : nil,
+                sampleStatus: DriveCkSampleStatus.fromFFICode(sampleStatus)
             )
         )
     }
