@@ -7,9 +7,13 @@ fn main() {
 mod app {
     use std::{
         cell::RefCell,
+        env,
+        io::{self, BufRead, BufReader, BufWriter, Read as _, Write as _},
+        os::unix::process::ExitStatusExt,
+        process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio},
         rc::Rc,
         sync::{
-            Arc,
+            Arc, Mutex,
             atomic::{AtomicBool, Ordering},
             mpsc,
         },
@@ -18,24 +22,117 @@ mod app {
     };
 
     use driveck_core::{
-        ProgressUpdate, TargetInfo, ValidationFailure, ValidationOptions, ValidationReport,
-        collect_targets, discover_target, format_bytes, format_report_text, report_verdict,
-        save_report, validate_target_with_callbacks,
+        ProgressUpdate, SampleStatus, TargetInfo, ValidationFailure, ValidationOptions,
+        ValidationReport, collect_targets, discover_target, format_bytes, format_report_text,
+        report_verdict, save_report, validate_target_with_callbacks,
     };
     use gtk::{
-        Application, ApplicationWindow, Box as GtkBox, Button, DropDown, FileChooserAction,
-        FileChooserNative, Label, MessageDialog, Orientation, ProgressBar, ResponseType,
-        ScrolledWindow, StringList, TextBuffer, TextView,
+        Align, Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, Dialog,
+        DrawingArea, DropDown, FileChooserAction, FileChooserNative, Label, MessageDialog,
+        Orientation, ResponseType, STYLE_PROVIDER_PRIORITY_APPLICATION, ScrolledWindow, StringList,
+        TextView, gdk,
         glib::{self, ControlFlow, Propagation},
+        pango,
         prelude::*,
+        style_context_add_provider_for_display,
     };
+    use serde::{Deserialize, Serialize};
+
+    const GRID_SIDE: usize = 24;
+    const GRID_SIZE: i32 = 280;
+    const GRID_GAP: f64 = 2.0;
+    const GRID_PADDING: f64 = 10.0;
+    const APP_CSS: &str = r#"
+    .window-root {
+        background: #f4f7fb;
+    }
+
+    .panel {
+        background: #ffffff;
+        border-radius: 16px;
+        border: 1px solid rgba(15, 23, 42, 0.08);
+        padding: 12px;
+    }
+
+    .app-title {
+        font-size: 24px;
+        font-weight: 800;
+        color: #101828;
+    }
+
+    .app-subtitle,
+    .device-meta,
+    .device-path,
+    .report-hint {
+        color: #667085;
+    }
+
+    .panel-title {
+        font-size: 14px;
+        font-weight: 700;
+        color: #344054;
+    }
+
+    .device-title {
+        font-size: 16px;
+        font-weight: 700;
+        color: #101828;
+    }
+
+    .status-line {
+        font-size: 13px;
+        font-weight: 700;
+        color: #344054;
+    }
+
+    .metric-chip,
+    .legend-chip {
+        border-radius: 999px;
+        padding: 6px 10px;
+        font-weight: 700;
+    }
+
+    .metric-neutral,
+    .legend-pending {
+        background: #eef2f6;
+        color: #475467;
+    }
+
+    .metric-success,
+    .legend-success {
+        background: #e7f6ec;
+        color: #167944;
+    }
+
+    .metric-danger,
+    .legend-danger {
+        background: #fdebec;
+        color: #c4323f;
+    }
+
+    .summary-key {
+        color: #667085;
+        font-size: 12px;
+        font-weight: 700;
+    }
+
+    .summary-value {
+        color: #101828;
+        font-size: 13px;
+        font-weight: 700;
+    }
+    "#;
 
     #[derive(Debug)]
     enum WorkerMessage {
+        Authenticated,
         Progress {
             phase: String,
             current: usize,
             total: usize,
+            sample_index: Option<usize>,
+            sample_status: Option<SampleStatus>,
+            final_update: bool,
         },
         Finished(WorkerResult),
     }
@@ -48,17 +145,102 @@ mod app {
         error: Option<String>,
     }
 
+    #[derive(Debug, Clone, Serialize, Deserialize)]
+    #[serde(tag = "kind", rename_all = "snake_case")]
+    enum HelperEvent {
+        Started,
+        Progress {
+            phase: String,
+            current: usize,
+            total: usize,
+            sample_index: Option<usize>,
+            sample_status: Option<SampleStatus>,
+            final_update: bool,
+        },
+        Finished {
+            report: Option<ValidationReport>,
+            error: Option<String>,
+        },
+    }
+
+    struct StartedValidation {
+        receiver: mpsc::Receiver<WorkerMessage>,
+        worker: JoinHandle<()>,
+        helper_cancel_pipe: Option<Arc<Mutex<ChildStdin>>>,
+        helper_process: Option<Arc<Mutex<Child>>>,
+        auth_pending: bool,
+    }
+
+    pub enum LaunchMode {
+        App,
+        ValidateHelper { device_path: String },
+    }
+
+    #[derive(Debug, Clone)]
+    struct ValidationGridState {
+        sample_status: Vec<SampleStatus>,
+        last_sample: Option<usize>,
+    }
+
+    impl Default for ValidationGridState {
+        fn default() -> Self {
+            Self {
+                sample_status: vec![SampleStatus::Untested; driveck_core::DRIVECK_SAMPLE_COUNT],
+                last_sample: None,
+            }
+        }
+    }
+
+    impl ValidationGridState {
+        fn reset(&mut self) {
+            self.sample_status.fill(SampleStatus::Untested);
+            self.last_sample = None;
+        }
+
+        fn mark(&mut self, sample_index: usize, status: SampleStatus) {
+            if let Some(slot) = self.sample_status.get_mut(sample_index) {
+                *slot = status;
+                self.last_sample = Some(sample_index);
+            }
+        }
+
+        fn sync_from_report(&mut self, report: &ValidationReport) {
+            self.sample_status = report.sample_status.clone();
+            self.last_sample = None;
+        }
+
+        fn counts(&self) -> (usize, usize, usize) {
+            let processed = self
+                .sample_status
+                .iter()
+                .filter(|status| **status != SampleStatus::Untested)
+                .count();
+            let ok = self
+                .sample_status
+                .iter()
+                .filter(|status| **status == SampleStatus::Ok)
+                .count();
+            let failed = processed.saturating_sub(ok);
+            (processed, ok, failed)
+        }
+    }
+
     struct AppState {
         window: ApplicationWindow,
         device_dropdown: DropDown,
-        device_details_label: Label,
+        device_title_label: Label,
+        device_meta_label: Label,
+        device_path_label: Label,
+        processed_label: Label,
+        ok_label: Label,
+        fail_label: Label,
         refresh_button: Button,
         validate_button: Button,
         stop_button: Button,
-        save_button: Button,
+        report_button: Button,
         status_label: Label,
-        progress_bar: ProgressBar,
-        report_buffer: TextBuffer,
+        validation_map: DrawingArea,
+        validation_grid_state: Rc<RefCell<ValidationGridState>>,
         device_model: StringList,
         device_targets: Vec<TargetInfo>,
         report_text: Option<String>,
@@ -67,6 +249,9 @@ mod app {
         worker: Option<JoinHandle<()>>,
         receiver: Option<mpsc::Receiver<WorkerMessage>>,
         cancel_requested: Arc<AtomicBool>,
+        helper_cancel_pipe: Option<Arc<Mutex<ChildStdin>>>,
+        helper_process: Option<Arc<Mutex<Child>>>,
+        helper_auth_pending: bool,
         closing_requested: bool,
     }
 
@@ -79,8 +264,61 @@ mod app {
             self.status_label.set_text(text);
         }
 
-        fn set_report_text(&self, text: &str) {
-            self.report_buffer.set_text(text);
+        fn update_report_button(&self) {
+            let visible = self.report_text.is_some();
+            self.report_button.set_visible(visible);
+            self.report_button.set_sensitive(!self.is_busy() && visible);
+        }
+
+        fn refresh_live_metrics(&self) {
+            let (processed, ok, failed) = self.validation_grid_state.borrow().counts();
+            self.processed_label.set_text(&format!(
+                "Done {processed}/{}",
+                driveck_core::DRIVECK_SAMPLE_COUNT
+            ));
+            self.ok_label.set_text(&format!("OK {ok}"));
+            self.fail_label.set_text(&format!("Fail {failed}"));
+
+            self.fail_label.remove_css_class("metric-neutral");
+            self.fail_label.remove_css_class("metric-danger");
+            self.fail_label.add_css_class(if failed == 0 {
+                "metric-neutral"
+            } else {
+                "metric-danger"
+            });
+        }
+
+        fn reset_validation_view(&mut self) {
+            self.report_text = None;
+            self.last_report = None;
+            self.last_target = None;
+            self.set_status("Starting validation...");
+            self.report_button.set_visible(false);
+            {
+                let mut grid = self.validation_grid_state.borrow_mut();
+                grid.reset();
+            }
+            self.validation_map.queue_draw();
+            self.refresh_live_metrics();
+        }
+
+        fn request_stop(&self) {
+            self.cancel_requested.store(true, Ordering::Relaxed);
+            if self.helper_auth_pending {
+                if let Some(helper_process) = &self.helper_process {
+                    if let Ok(mut child) = helper_process.lock() {
+                        let _ = child.kill();
+                    }
+                }
+                return;
+            }
+
+            if let Some(cancel_pipe) = &self.helper_cancel_pipe {
+                if let Ok(mut stdin) = cancel_pipe.lock() {
+                    let _ = stdin.write_all(b"cancel\n");
+                    let _ = stdin.flush();
+                }
+            }
         }
 
         fn update_actions(&self) {
@@ -97,8 +335,7 @@ mod app {
             self.refresh_button.set_sensitive(!busy);
             self.validate_button.set_sensitive(can_validate);
             self.stop_button.set_sensitive(busy);
-            self.save_button
-                .set_sensitive(!busy && self.last_report.is_some() && self.report_text.is_some());
+            self.update_report_button();
         }
 
         fn refresh_device_list(&mut self) {
@@ -141,31 +378,16 @@ mod app {
         fn update_device_details(&self) {
             let selected = self.device_dropdown.selected() as usize;
             if let Some(target) = self.device_targets.get(selected) {
-                self.device_details_label.set_text(&format!(
-                    "Path: {}\nSize: {}\nTransport: {}{}\nModel: {}{}\nState: {}",
-                    target.path,
-                    format_bytes(target.size_bytes),
-                    if target.is_usb { "usb" } else { "block" },
-                    if target.is_removable {
-                        ", removable"
-                    } else {
-                        ""
-                    },
-                    target.vendor,
-                    if !target.model.is_empty() {
-                        format!(" {}", target.model)
-                    } else {
-                        String::new()
-                    },
-                    if target.is_mounted {
-                        "mounted, unmount before validating"
-                    } else {
-                        "ready"
-                    }
-                ));
+                self.device_title_label
+                    .set_text(&device_display_name(target));
+                self.device_meta_label
+                    .set_text(&device_meta_text(target).replace(", ", " / "));
+                self.device_path_label.set_text(&target.path);
             } else {
-                self.device_details_label
-                    .set_text("No removable or USB whole-disk device is currently available.");
+                self.device_title_label.set_text("No device available");
+                self.device_meta_label
+                    .set_text("Insert a removable or USB whole-disk device.");
+                self.device_path_label.set_text("");
             }
             self.update_actions();
         }
@@ -187,38 +409,38 @@ mod app {
         }
 
         fn start_validation(&mut self, target: TargetInfo) {
-            let (sender, receiver) = mpsc::channel::<WorkerMessage>();
-            let cancel_requested = self.cancel_requested.clone();
-            self.receiver = Some(receiver);
             self.cancel_requested.store(false, Ordering::Relaxed);
             self.closing_requested = false;
-            self.report_text = None;
-            self.last_report = None;
-            self.last_target = None;
-            self.set_report_text("Validation in progress...");
-            self.set_status("Starting validation...");
-            self.progress_bar.set_fraction(0.0);
-            self.progress_bar.set_text(Some("Starting validation..."));
-            self.update_actions();
+            let started = if needs_privileged_helper() {
+                spawn_privileged_validation_worker(target)
+            } else {
+                Ok(spawn_local_validation_worker(
+                    target,
+                    self.cancel_requested.clone(),
+                ))
+            };
 
-            self.worker = Some(thread::spawn(move || {
-                let mut progress = |update: ProgressUpdate| {
-                    let _ = sender.send(WorkerMessage::Progress {
-                        phase: update.phase.to_string(),
-                        current: update.current,
-                        total: update.total,
-                    });
-                };
-                let cancel = || cancel_requested.load(Ordering::Relaxed);
-                let result = validate_target_with_callbacks(
-                    &target,
-                    &ValidationOptions { seed: None },
-                    Some(&mut progress),
-                    Some(&cancel),
-                );
-                let worker_result = build_worker_result(target, result);
-                let _ = sender.send(WorkerMessage::Finished(worker_result));
-            }));
+            match started {
+                Ok(started) => {
+                    self.receiver = Some(started.receiver);
+                    self.worker = Some(started.worker);
+                    self.helper_cancel_pipe = started.helper_cancel_pipe;
+                    self.helper_process = started.helper_process;
+                    self.helper_auth_pending = started.auth_pending;
+                    self.reset_validation_view();
+                    if self.helper_auth_pending {
+                        self.set_status("Waiting for administrator authentication...");
+                    }
+                    self.update_actions();
+                }
+                Err(error) => {
+                    self.cancel_requested.store(false, Ordering::Relaxed);
+                    self.helper_cancel_pipe = None;
+                    self.helper_process = None;
+                    self.helper_auth_pending = false;
+                    self.show_message("Cannot start validation.", &error);
+                }
+            }
         }
 
         fn poll_worker_messages(&mut self) {
@@ -226,20 +448,36 @@ mod app {
             if let Some(receiver) = self.receiver.as_ref() {
                 while let Ok(message) = receiver.try_recv() {
                     match message {
+                        WorkerMessage::Authenticated => {
+                            self.helper_auth_pending = false;
+                            self.set_status("Administrator access granted. Starting validation...");
+                        }
                         WorkerMessage::Progress {
                             phase,
                             current,
                             total,
+                            sample_index,
+                            sample_status,
+                            final_update,
                         } => {
-                            let fraction = if total == 0 {
-                                0.0
+                            self.helper_auth_pending = false;
+                            if let (Some(sample_index), Some(sample_status)) =
+                                (sample_index, sample_status)
+                            {
+                                self.validation_grid_state
+                                    .borrow_mut()
+                                    .mark(sample_index, sample_status);
+                                self.validation_map.queue_draw();
+                                self.refresh_live_metrics();
+                            }
+
+                            let progress_text = format!("{current}/{total}");
+                            let status_text = if final_update {
+                                format!("{phase} {progress_text}")
                             } else {
-                                current as f64 / total as f64
+                                format!("{phase} sample {progress_text}")
                             };
-                            let text = format!("{phase} {current}/{total}");
-                            self.progress_bar.set_fraction(fraction.min(1.0));
-                            self.progress_bar.set_text(Some(&text));
-                            self.set_status(&text);
+                            self.set_status(&status_text);
                         }
                         WorkerMessage::Finished(result) => finished = Some(result),
                     }
@@ -252,21 +490,22 @@ mod app {
                 }
                 self.receiver = None;
                 self.cancel_requested.store(false, Ordering::Relaxed);
+                self.helper_cancel_pipe = None;
+                self.helper_process = None;
+                self.helper_auth_pending = false;
 
                 self.last_target = Some(result.target.clone());
                 self.last_report = result.report.clone();
                 self.report_text = result.report_text.clone();
-                if let Some(text) = &self.report_text {
-                    self.set_report_text(text);
-                }
+                self.update_report_button();
 
                 if let Some(report) = &result.report {
-                    let fraction = if report.completed_samples == 0 {
-                        0.0
-                    } else {
-                        report.completed_samples as f64 / driveck_core::DRIVECK_SAMPLE_COUNT as f64
-                    };
-                    self.progress_bar.set_fraction(fraction);
+                    self.validation_grid_state
+                        .borrow_mut()
+                        .sync_from_report(report);
+                    self.validation_map.queue_draw();
+                    self.refresh_live_metrics();
+
                     let status_text = if let Some(error) = result.error.as_deref() {
                         if report.cancelled {
                             "Validation cancelled.".to_string()
@@ -276,10 +515,8 @@ mod app {
                     } else {
                         format!("Finished: {}", report_verdict(report))
                     };
-                    self.progress_bar.set_text(Some(&status_text));
                     self.set_status(&status_text);
                 } else if let Some(error) = result.error.as_deref() {
-                    self.progress_bar.set_text(Some("Validation failed."));
                     self.set_status(error);
                     self.show_message("Validation failed.", error);
                 }
@@ -311,25 +548,481 @@ mod app {
         result: Result<ValidationReport, ValidationFailure>,
     ) -> WorkerResult {
         match result {
-            Ok(report) => WorkerResult {
-                report_text: Some(format_report_text(&target, &report)),
-                target,
-                report: Some(report),
-                error: None,
-            },
-            Err(error) => {
-                let report_text = error
-                    .report
+            Ok(report) => build_worker_result_from_parts(target, Some(report), None),
+            Err(error) => build_worker_result_from_parts(target, error.report, Some(error.message)),
+        }
+    }
+
+    fn build_worker_result_from_parts(
+        target: TargetInfo,
+        report: Option<ValidationReport>,
+        error: Option<String>,
+    ) -> WorkerResult {
+        let report_text = report
+            .as_ref()
+            .map(|report| format_report_text(&target, report))
+            .or_else(|| {
+                error
                     .as_ref()
-                    .map(|report| format_report_text(&target, report));
-                WorkerResult {
-                    target,
-                    report: error.report,
+                    .map(|error| format!("DriveCk\nTarget: {}\n\n{error}", target.path))
+            });
+        WorkerResult {
+            target,
+            report,
+            report_text,
+            error,
+        }
+    }
+
+    fn show_save_report_dialog(state: &Rc<RefCell<AppState>>) {
+        let (target, report, window) = {
+            let state = state.borrow();
+            match (state.last_target.clone(), state.last_report.clone()) {
+                (Some(target), Some(report)) => (target, report, state.window.clone()),
+                _ => return,
+            }
+        };
+
+        let dialog = FileChooserNative::builder()
+            .title("Save validation report")
+            .transient_for(&window)
+            .action(FileChooserAction::Save)
+            .accept_label("Save")
+            .cancel_label("Cancel")
+            .modal(true)
+            .build();
+        let state = state.clone();
+        dialog.connect_response(move |dialog, response| {
+            if response == ResponseType::Accept {
+                if let Some(file) = dialog.file() {
+                    if let Some(path) = file.path() {
+                        if let Err(error) = save_report(&path, &target, &report) {
+                            state
+                                .borrow()
+                                .show_message("Failed to save report.", &error.message);
+                        } else {
+                            state.borrow().set_status("Report saved.");
+                        }
+                    }
+                }
+            }
+            dialog.destroy();
+        });
+        dialog.show();
+    }
+
+    fn show_report_dialog(state: &Rc<RefCell<AppState>>) {
+        let (window, report_text, can_save) = {
+            let state = state.borrow();
+            match state.report_text.clone() {
+                Some(report_text) => (
+                    state.window.clone(),
                     report_text,
-                    error: Some(error.message),
+                    state.last_report.is_some() && state.last_target.is_some(),
+                ),
+                None => return,
+            }
+        };
+
+        let dialog = Dialog::builder()
+            .transient_for(&window)
+            .modal(true)
+            .title("Detailed report")
+            .default_width(760)
+            .default_height(520)
+            .build();
+        dialog.add_button("Close", ResponseType::Close);
+        dialog.add_button("Copy", ResponseType::Apply);
+        if can_save {
+            dialog.add_button("Save report", ResponseType::Accept);
+        }
+
+        let scroller = ScrolledWindow::new();
+        scroller.set_hexpand(true);
+        scroller.set_vexpand(true);
+        let text_view = TextView::new();
+        text_view.set_editable(false);
+        text_view.set_cursor_visible(false);
+        text_view.set_monospace(true);
+        text_view.set_top_margin(10);
+        text_view.set_bottom_margin(10);
+        text_view.set_left_margin(10);
+        text_view.set_right_margin(10);
+        text_view.buffer().set_text(&report_text);
+        scroller.set_child(Some(&text_view));
+        dialog.content_area().append(&scroller);
+
+        let state = state.clone();
+        let report_text_for_copy = report_text.clone();
+        dialog.connect_response(move |dialog, response| {
+            if response == ResponseType::Accept {
+                show_save_report_dialog(&state);
+                return;
+            }
+            if response == ResponseType::Apply {
+                if let Some(display) = gdk::Display::default() {
+                    display.clipboard().set_text(&report_text_for_copy);
+                    state.borrow().set_status("Report copied.");
+                }
+                return;
+            }
+            dialog.close();
+        });
+        dialog.present();
+    }
+
+    fn needs_privileged_helper() -> bool {
+        unsafe { libc::geteuid() != 0 }
+    }
+
+    fn spawn_local_validation_worker(
+        target: TargetInfo,
+        cancel_requested: Arc<AtomicBool>,
+    ) -> StartedValidation {
+        let (sender, receiver) = mpsc::channel::<WorkerMessage>();
+        let worker = thread::spawn(move || {
+            let mut progress = |update: ProgressUpdate| {
+                let _ = sender.send(WorkerMessage::Progress {
+                    phase: update.phase.to_string(),
+                    current: update.current,
+                    total: update.total,
+                    sample_index: update.sample_index,
+                    sample_status: update.sample_status,
+                    final_update: update.final_update,
+                });
+            };
+            let cancel = || cancel_requested.load(Ordering::Relaxed);
+            let result = validate_target_with_callbacks(
+                &target,
+                &ValidationOptions { seed: None },
+                Some(&mut progress),
+                Some(&cancel),
+            );
+            let worker_result = build_worker_result(target, result);
+            let _ = sender.send(WorkerMessage::Finished(worker_result));
+        });
+
+        StartedValidation {
+            receiver,
+            worker,
+            helper_cancel_pipe: None,
+            helper_process: None,
+            auth_pending: false,
+        }
+    }
+
+    fn spawn_privileged_validation_worker(target: TargetInfo) -> Result<StartedValidation, String> {
+        let executable = env::current_exe()
+            .map_err(|error| format!("Failed to locate the DriveCk executable: {error}"))?;
+
+        let mut command = Command::new("pkexec");
+        command
+            .arg("--disable-internal-agent")
+            .arg(executable)
+            .arg("--validate-helper")
+            .arg(&target.path)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+
+        let mut child = command.spawn().map_err(|error| {
+            if error.kind() == io::ErrorKind::NotFound {
+                "pkexec is not installed. Install polkit/pkexec to validate from the GTK app."
+                    .to_string()
+            } else {
+                format!("Failed to start GUI authentication with pkexec: {error}")
+            }
+        })?;
+
+        let helper_cancel_pipe = child
+            .stdin
+            .take()
+            .map(|stdin| Arc::new(Mutex::new(stdin)))
+            .ok_or_else(|| {
+                "Failed to open the privileged validation control channel.".to_string()
+            })?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| "Failed to capture privileged validation output.".to_string())?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| "Failed to capture privileged validation diagnostics.".to_string())?;
+        let helper_process = Arc::new(Mutex::new(child));
+
+        let (sender, receiver) = mpsc::channel::<WorkerMessage>();
+        let worker = {
+            let helper_process = helper_process.clone();
+            let target = target.clone();
+            thread::spawn(move || {
+                run_privileged_validation_worker(target, helper_process, stdout, stderr, sender);
+            })
+        };
+
+        Ok(StartedValidation {
+            receiver,
+            worker,
+            helper_cancel_pipe: Some(helper_cancel_pipe),
+            helper_process: Some(helper_process),
+            auth_pending: true,
+        })
+    }
+
+    fn run_privileged_validation_worker(
+        target: TargetInfo,
+        helper_process: Arc<Mutex<Child>>,
+        stdout: ChildStdout,
+        stderr: ChildStderr,
+        sender: mpsc::Sender<WorkerMessage>,
+    ) {
+        let stderr_thread = thread::spawn(move || {
+            let mut text = String::new();
+            let _ = BufReader::new(stderr).read_to_string(&mut text);
+            text
+        });
+
+        let mut finished = None;
+        let mut parse_error = None;
+        let reader = BufReader::new(stdout);
+        for line in reader.lines() {
+            let line = match line {
+                Ok(line) => line,
+                Err(error) => {
+                    parse_error = Some(format!(
+                        "Failed to read privileged validation output: {error}"
+                    ));
+                    break;
+                }
+            };
+            if line.trim().is_empty() {
+                continue;
+            }
+
+            match serde_json::from_str::<HelperEvent>(&line) {
+                Ok(HelperEvent::Started) => {
+                    let _ = sender.send(WorkerMessage::Authenticated);
+                }
+                Ok(HelperEvent::Progress {
+                    phase,
+                    current,
+                    total,
+                    sample_index,
+                    sample_status,
+                    final_update,
+                }) => {
+                    let _ = sender.send(WorkerMessage::Progress {
+                        phase,
+                        current,
+                        total,
+                        sample_index,
+                        sample_status,
+                        final_update,
+                    });
+                }
+                Ok(HelperEvent::Finished { report, error }) => {
+                    finished = Some(build_worker_result_from_parts(
+                        target.clone(),
+                        report,
+                        error,
+                    ));
+                }
+                Err(error) => {
+                    parse_error = Some(format!(
+                        "Privileged validation returned unexpected output: {error}"
+                    ));
+                    break;
                 }
             }
         }
+
+        let exit_status = wait_for_helper_exit(&helper_process);
+        let stderr_text = stderr_thread.join().unwrap_or_default();
+        let worker_result = finished.unwrap_or_else(|| {
+            build_worker_result_from_parts(
+                target,
+                None,
+                Some(helper_process_error(exit_status, &stderr_text, parse_error)),
+            )
+        });
+        let _ = sender.send(WorkerMessage::Finished(worker_result));
+    }
+
+    fn wait_for_helper_exit(helper_process: &Arc<Mutex<Child>>) -> ExitStatus {
+        match helper_process.lock() {
+            Ok(mut child) => child
+                .wait()
+                .unwrap_or_else(|_| ExitStatus::from_raw(1 << 8)),
+            Err(_) => ExitStatus::from_raw(1 << 8),
+        }
+    }
+
+    fn helper_process_error(
+        exit_status: ExitStatus,
+        stderr_text: &str,
+        parse_error: Option<String>,
+    ) -> String {
+        if let Some(parse_error) = parse_error {
+            return parse_error;
+        }
+
+        let stderr_text = stderr_text.trim();
+        if !stderr_text.is_empty() {
+            return stderr_text.to_string();
+        }
+
+        if exit_status.code().is_none() {
+            return "Validation cancelled.".to_string();
+        }
+
+        match exit_status.code() {
+            Some(126) => "Administrator authentication was cancelled.".to_string(),
+            Some(127) => {
+                "GUI authentication failed because no polkit agent handled the request.".to_string()
+            }
+            Some(code) => format!("Privileged validation exited with status code {code}."),
+            None => "Validation cancelled.".to_string(),
+        }
+    }
+
+    fn write_helper_event<W: io::Write>(
+        writer: &mut BufWriter<W>,
+        event: &HelperEvent,
+    ) -> io::Result<()> {
+        serde_json::to_writer(&mut *writer, event).map_err(io::Error::other)?;
+        writer.write_all(b"\n")?;
+        writer.flush()
+    }
+
+    pub fn parse_launch_mode(args: &[String]) -> Result<LaunchMode, String> {
+        match args.get(1).map(String::as_str) {
+            Some("--validate-helper") => {
+                let device_path = args
+                    .get(2)
+                    .ok_or_else(|| "--validate-helper requires a device path.".to_string())?;
+                if args.len() != 3 {
+                    return Err(
+                        "--validate-helper accepts exactly one whole-device path.".to_string()
+                    );
+                }
+                Ok(LaunchMode::ValidateHelper {
+                    device_path: device_path.clone(),
+                })
+            }
+            _ => Ok(LaunchMode::App),
+        }
+    }
+
+    pub fn run_validate_helper(device_path: &str) -> i32 {
+        let stdout = io::stdout();
+        let mut writer = BufWriter::new(stdout.lock());
+        let target = match discover_target(device_path) {
+            Ok(target) => target,
+            Err(error) => {
+                let _ = write_helper_event(
+                    &mut writer,
+                    &HelperEvent::Finished {
+                        report: None,
+                        error: Some(error.message),
+                    },
+                );
+                return 2;
+            }
+        };
+
+        if write_helper_event(&mut writer, &HelperEvent::Started).is_err() {
+            return 2;
+        }
+
+        let cancel_requested = Arc::new(AtomicBool::new(false));
+        {
+            let cancel_requested = cancel_requested.clone();
+            thread::spawn(move || {
+                let stdin = io::stdin();
+                let reader = BufReader::new(stdin.lock());
+                for line in reader.lines() {
+                    match line {
+                        Ok(line) if line.trim().eq_ignore_ascii_case("cancel") => {
+                            cancel_requested.store(true, Ordering::Relaxed);
+                            break;
+                        }
+                        Ok(_) => {}
+                        Err(_) => break,
+                    }
+                }
+            });
+        }
+
+        let writer_failed = Arc::new(AtomicBool::new(false));
+        let result = {
+            let progress_failed = writer_failed.clone();
+            let cancel_requested = cancel_requested.clone();
+            let mut progress = |update: ProgressUpdate| {
+                if progress_failed.load(Ordering::Relaxed) {
+                    return;
+                }
+
+                let event = HelperEvent::Progress {
+                    phase: update.phase.to_string(),
+                    current: update.current,
+                    total: update.total,
+                    sample_index: update.sample_index,
+                    sample_status: update.sample_status,
+                    final_update: update.final_update,
+                };
+                if write_helper_event(&mut writer, &event).is_err() {
+                    progress_failed.store(true, Ordering::Relaxed);
+                }
+            };
+            let cancel = || {
+                cancel_requested.load(Ordering::Relaxed) || writer_failed.load(Ordering::Relaxed)
+            };
+            validate_target_with_callbacks(
+                &target,
+                &ValidationOptions { seed: None },
+                Some(&mut progress),
+                Some(&cancel),
+            )
+        };
+
+        let (report, error, exit_code) = match result {
+            Ok(report) => (Some(report), None, 0),
+            Err(error) => (error.report, Some(error.message), 1),
+        };
+        let _ = write_helper_event(&mut writer, &HelperEvent::Finished { report, error });
+        exit_code
+    }
+
+    fn device_display_name(target: &TargetInfo) -> String {
+        let name = format!("{} {}", target.vendor, target.model)
+            .trim()
+            .to_string();
+        if !name.is_empty() {
+            name
+        } else if !target.name.is_empty() {
+            target.name.clone()
+        } else {
+            target.path.clone()
+        }
+    }
+
+    fn device_meta_text(target: &TargetInfo) -> String {
+        let transport = match (target.is_usb, target.is_removable) {
+            (true, true) => "usb, removable",
+            (true, false) => "usb",
+            (false, true) => "removable",
+            (false, false) => "block",
+        };
+        format!(
+            "{} / {} / {}",
+            format_bytes(target.size_bytes),
+            transport,
+            if target.is_mounted {
+                "mounted"
+            } else {
+                "ready"
+            }
+        )
     }
 
     fn device_row_text(target: &TargetInfo) -> String {
@@ -344,82 +1037,213 @@ mod app {
                 ""
             },
             target.model,
-            if target.is_mounted { "  [mounted]" } else { "" }
+            if target.is_mounted { " [mounted]" } else { "" }
         )
     }
 
+    fn install_css() {
+        let provider = CssProvider::new();
+        provider.load_from_data(APP_CSS);
+        if let Some(display) = gdk::Display::default() {
+            style_context_add_provider_for_display(
+                &display,
+                &provider,
+                STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+        }
+    }
+
+    fn build_metric_chip(text: &str, class_name: &str) -> Label {
+        let label = Label::new(Some(text));
+        label.add_css_class("metric-chip");
+        label.add_css_class(class_name);
+        label
+    }
+
+    fn build_legend_chip(text: &str, class_name: &str) -> Label {
+        let label = Label::new(Some(text));
+        label.add_css_class("legend-chip");
+        label.add_css_class(class_name);
+        label
+    }
+
+    fn draw_validation_map(
+        context: &gtk::cairo::Context,
+        width: i32,
+        height: i32,
+        grid_state: &ValidationGridState,
+    ) {
+        let width = width as f64;
+        let height = height as f64;
+        let side = width.min(height);
+        let cell = ((side - 2.0 * GRID_PADDING - GRID_GAP * (GRID_SIDE as f64 - 1.0))
+            / GRID_SIDE as f64)
+            .max(1.0);
+        let grid_extent = cell * GRID_SIDE as f64 + GRID_GAP * (GRID_SIDE as f64 - 1.0);
+        let origin_x = (width - grid_extent) / 2.0;
+        let origin_y = (height - grid_extent) / 2.0;
+
+        context.set_source_rgb(0.965, 0.972, 0.984);
+        let _ = context.paint();
+
+        for row in 0..GRID_SIDE {
+            for column in 0..GRID_SIDE {
+                let index = row * GRID_SIDE + column;
+                let x = origin_x + column as f64 * (cell + GRID_GAP);
+                let y = origin_y + row as f64 * (cell + GRID_GAP);
+                let status = grid_state.sample_status[index];
+                let (red, green, blue) = match status {
+                    SampleStatus::Untested => (0.84, 0.88, 0.93),
+                    SampleStatus::Ok => (0.12, 0.67, 0.39),
+                    SampleStatus::ReadError
+                    | SampleStatus::WriteError
+                    | SampleStatus::VerifyMismatch
+                    | SampleStatus::RestoreError => (0.86, 0.28, 0.29),
+                };
+
+                context.set_source_rgb(red, green, blue);
+                context.rectangle(x, y, cell, cell);
+                let _ = context.fill();
+
+                if grid_state.last_sample == Some(index) {
+                    context.set_source_rgb(1.0, 1.0, 1.0);
+                    context.set_line_width(2.0);
+                    context.rectangle(
+                        x + 1.0,
+                        y + 1.0,
+                        (cell - 2.0).max(1.0),
+                        (cell - 2.0).max(1.0),
+                    );
+                    let _ = context.stroke();
+                }
+            }
+        }
+    }
+
     fn build_ui(application: &Application) -> Rc<RefCell<AppState>> {
+        install_css();
+
         let window = ApplicationWindow::builder()
             .application(application)
             .title("DriveCk")
-            .default_width(960)
-            .default_height(760)
+            .default_width(720)
+            .default_height(600)
             .build();
 
-        let root = GtkBox::new(Orientation::Vertical, 12);
+        let root = GtkBox::new(Orientation::Vertical, 8);
+        root.add_css_class("window-root");
         root.set_margin_top(12);
         root.set_margin_bottom(12);
         root.set_margin_start(12);
         root.set_margin_end(12);
 
-        let intro = Label::new(Some(
-            "Rust port of DriveCk.\nPick a removable or USB whole-disk target, then run a 576-point write/read/restore validation pass.",
-        ));
-        intro.set_wrap(true);
-        intro.set_xalign(0.0);
-        root.append(&intro);
+        let device_panel = GtkBox::new(Orientation::Vertical, 8);
+        device_panel.add_css_class("panel");
+        device_panel.set_hexpand(true);
 
+        let device_row = GtkBox::new(Orientation::Horizontal, 6);
         let device_model = StringList::new(&[]);
         let device_dropdown = DropDown::new(Some(device_model.clone()), None::<gtk::Expression>);
-        let device_details_label = Label::new(None);
-        device_details_label.set_wrap(true);
-        device_details_label.set_xalign(0.0);
-        root.append(&device_dropdown);
-        root.append(&device_details_label);
-
-        let actions = GtkBox::new(Orientation::Horizontal, 6);
-        let refresh_button = Button::with_label("Refresh devices");
+        device_dropdown.set_hexpand(true);
+        let refresh_button = Button::with_label("Refresh");
         let validate_button = Button::with_label("Validate");
+        validate_button.add_css_class("suggested-action");
         let stop_button = Button::with_label("Stop");
-        let save_button = Button::with_label("Save report…");
-        actions.append(&refresh_button);
-        actions.append(&validate_button);
-        actions.append(&stop_button);
-        actions.append(&save_button);
-        root.append(&actions);
+        stop_button.add_css_class("destructive-action");
+        device_row.append(&device_dropdown);
+        device_row.append(&refresh_button);
+        device_row.append(&validate_button);
+        device_row.append(&stop_button);
+        device_panel.append(&device_row);
 
-        let status_label = Label::new(Some("Ready."));
+        let device_title_label = Label::new(Some("No device available"));
+        device_title_label.add_css_class("device-title");
+        device_title_label.set_xalign(0.0);
+        let device_meta_label = Label::new(Some("Insert a removable or USB whole-disk device."));
+        device_meta_label.add_css_class("device-meta");
+        device_meta_label.set_xalign(0.0);
+        let device_path_label = Label::new(None);
+        device_path_label.add_css_class("device-path");
+        device_path_label.set_xalign(0.0);
+        device_path_label.set_wrap(false);
+        device_path_label.set_single_line_mode(true);
+        device_path_label.set_ellipsize(pango::EllipsizeMode::Middle);
+        let status_label = Label::new(Some("Select a device to begin."));
+        status_label.add_css_class("status-line");
         status_label.set_xalign(0.0);
-        root.append(&status_label);
+        device_panel.append(&device_title_label);
+        device_panel.append(&device_meta_label);
+        device_panel.append(&device_path_label);
+        device_panel.append(&status_label);
+        root.append(&device_panel);
 
-        let progress_bar = ProgressBar::new();
-        progress_bar.set_show_text(true);
-        progress_bar.set_text(Some("Idle"));
-        root.append(&progress_bar);
+        let map_panel = GtkBox::new(Orientation::Vertical, 8);
+        map_panel.add_css_class("panel");
+        map_panel.set_hexpand(true);
+        let map_top = GtkBox::new(Orientation::Horizontal, 8);
+        let map_title = Label::new(Some("Validation map"));
+        map_title.add_css_class("panel-title");
+        map_title.set_xalign(0.0);
+        map_title.set_hexpand(true);
+        map_top.append(&map_title);
+        map_panel.append(&map_top);
 
-        let scroller = ScrolledWindow::new();
-        scroller.set_vexpand(true);
-        let text_view = TextView::new();
-        text_view.set_editable(false);
-        text_view.set_cursor_visible(false);
-        text_view.set_monospace(true);
-        let report_buffer = text_view.buffer();
-        scroller.set_child(Some(&text_view));
-        root.append(&scroller);
+        let legend = GtkBox::new(Orientation::Horizontal, 6);
+        legend.append(&build_legend_chip("Pending", "legend-pending"));
+        legend.append(&build_legend_chip("OK", "legend-success"));
+        legend.append(&build_legend_chip("Fail", "legend-danger"));
+        map_panel.append(&legend);
 
+        let validation_grid_state = Rc::new(RefCell::new(ValidationGridState::default()));
+        let validation_map = DrawingArea::new();
+        validation_map.set_width_request(GRID_SIZE);
+        validation_map.set_height_request(GRID_SIZE);
+        validation_map.set_halign(Align::Center);
+        {
+            let validation_grid_state = validation_grid_state.clone();
+            validation_map.set_draw_func(move |_, context, width, height| {
+                if let Ok(grid_state) = validation_grid_state.try_borrow() {
+                    draw_validation_map(context, width, height, &grid_state);
+                }
+            });
+        }
+        map_panel.append(&validation_map);
+        let map_footer = GtkBox::new(Orientation::Horizontal, 8);
+        map_footer.set_hexpand(true);
+        let metrics_row = GtkBox::new(Orientation::Horizontal, 8);
+        let processed_label = build_metric_chip("Done 0/576", "metric-neutral");
+        let ok_label = build_metric_chip("OK 0", "metric-success");
+        let fail_label = build_metric_chip("Fail 0", "metric-neutral");
+        metrics_row.append(&processed_label);
+        metrics_row.append(&ok_label);
+        metrics_row.append(&fail_label);
+        let footer_spacer = GtkBox::new(Orientation::Horizontal, 0);
+        footer_spacer.set_hexpand(true);
+        let report_button = Button::with_label("Report");
+        report_button.set_visible(false);
+        map_footer.append(&metrics_row);
+        map_footer.append(&footer_spacer);
+        map_footer.append(&report_button);
+        map_panel.append(&map_footer);
+        root.append(&map_panel);
         window.set_child(Some(&root));
 
         let state = Rc::new(RefCell::new(AppState {
             window,
             device_dropdown,
-            device_details_label,
+            device_title_label,
+            device_meta_label,
+            device_path_label,
+            processed_label,
+            ok_label,
+            fail_label,
             refresh_button,
             validate_button,
             stop_button,
-            save_button,
+            report_button,
             status_label,
-            progress_bar,
-            report_buffer,
+            validation_map,
+            validation_grid_state,
             device_model,
             device_targets: Vec::new(),
             report_text: None,
@@ -428,12 +1252,11 @@ mod app {
             worker: None,
             receiver: None,
             cancel_requested: Arc::new(AtomicBool::new(false)),
+            helper_cancel_pipe: None,
+            helper_process: None,
+            helper_auth_pending: false,
             closing_requested: false,
         }));
-
-        state.borrow().set_report_text(
-            "No validation has run yet.\n\nChoose a removable or USB whole-disk device that is fully unmounted, then start validation.",
-        );
 
         {
             let state = state.clone();
@@ -472,12 +1295,14 @@ mod app {
                 dialog.add_button("Cancel", ResponseType::Cancel);
                 dialog.add_button("Validate", ResponseType::Accept);
                 dialog.connect_response(move |dialog, response| {
-                    if response == ResponseType::Accept {
-                        state_for_response
-                            .borrow_mut()
-                            .start_validation(target.clone());
-                    }
                     dialog.close();
+                    if response == ResponseType::Accept {
+                        let state_for_start = state_for_response.clone();
+                        let target = target.clone();
+                        glib::idle_add_local_once(move || {
+                            state_for_start.borrow_mut().start_validation(target);
+                        });
+                    }
                 });
                 dialog.present();
             });
@@ -488,51 +1313,16 @@ mod app {
             button.connect_clicked(move |_| {
                 let state = state.borrow();
                 if state.is_busy() {
-                    state.cancel_requested.store(true, Ordering::Relaxed);
+                    state.request_stop();
                     state.set_status("Stopping...");
-                    state.progress_bar.set_text(Some("Stopping..."));
                 }
             });
         }
         {
             let state = state.clone();
-            let button = state.borrow().save_button.clone();
-            let window = state.borrow().window.clone();
+            let button = state.borrow().report_button.clone();
             button.connect_clicked(move |_| {
-                let (target, report) = {
-                    let state = state.borrow();
-                    match (state.last_target.clone(), state.last_report.clone()) {
-                        (Some(target), Some(report)) => (target, report),
-                        _ => return,
-                    }
-                };
-
-                let dialog = FileChooserNative::builder()
-                    .title("Save validation report")
-                    .transient_for(&window)
-                    .action(FileChooserAction::Save)
-                    .accept_label("Save")
-                    .cancel_label("Cancel")
-                    .modal(true)
-                    .build();
-                let state = state.clone();
-                dialog.connect_response(move |dialog, response| {
-                    if response == ResponseType::Accept {
-                        if let Some(file) = dialog.file() {
-                            if let Some(path) = file.path() {
-                                if let Err(error) = save_report(&path, &target, &report) {
-                                    state
-                                        .borrow()
-                                        .show_message("Failed to save report.", &error.message);
-                                } else {
-                                    state.borrow().set_status("Report saved.");
-                                }
-                            }
-                        }
-                    }
-                    dialog.destroy();
-                });
-                dialog.show();
+                show_report_dialog(&state);
             });
         }
         {
@@ -553,9 +1343,8 @@ mod app {
                     return Propagation::Proceed;
                 }
                 state.closing_requested = true;
-                state.cancel_requested.store(true, Ordering::Relaxed);
+                state.request_stop();
                 state.set_status("Stopping before exit...");
-                state.progress_bar.set_text(Some("Stopping before exit..."));
                 Propagation::Stop
             });
         }
@@ -576,6 +1365,7 @@ mod app {
             });
         }
 
+        state.borrow().refresh_live_metrics();
         state.borrow_mut().refresh_device_list();
         state.borrow().window.present();
         state
@@ -590,9 +1380,46 @@ mod app {
         });
         application.run();
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::{LaunchMode, parse_launch_mode};
+
+        #[test]
+        fn launch_mode_defaults_to_app() {
+            let args = vec!["driveck".to_string()];
+            assert!(matches!(
+                parse_launch_mode(&args).expect("mode should parse"),
+                LaunchMode::App
+            ));
+        }
+
+        #[test]
+        fn launch_mode_parses_helper_path() {
+            let args = vec![
+                "driveck".to_string(),
+                "--validate-helper".to_string(),
+                "/dev/sdb".to_string(),
+            ];
+            match parse_launch_mode(&args).expect("mode should parse") {
+                LaunchMode::ValidateHelper { device_path } => assert_eq!(device_path, "/dev/sdb"),
+                LaunchMode::App => panic!("helper mode should be selected"),
+            }
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
 fn main() {
-    app::run();
+    let args = std::env::args().collect::<Vec<_>>();
+    match app::parse_launch_mode(&args) {
+        Ok(app::LaunchMode::App) => app::run(),
+        Ok(app::LaunchMode::ValidateHelper { device_path }) => {
+            std::process::exit(app::run_validate_helper(&device_path));
+        }
+        Err(error) => {
+            eprintln!("{error}");
+            std::process::exit(2);
+        }
+    }
 }

@@ -14,3 +14,6 @@ driveck-core.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 gtk.workspace = true
+libc.workspace = true
+serde.workspace = true
+serde_json.workspace = true

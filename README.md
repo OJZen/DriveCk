@@ -105,6 +105,10 @@ GTK on Linux:
 cargo run -p driveck-gtk
 ```
 
+When the GTK app starts a validation run on Linux, it now requests administrator
+access through a GUI `pkexec` / polkit prompt before opening the raw block
+device, unless the app is already running as root.
+
 Win32 on Windows:
 
 ```powershell
@@ -141,6 +145,7 @@ cargo check --target x86_64-pc-windows-gnu -p driveck-core -p driveck-win32
 - On macOS, validation should only be run against unmounted removable whole-disk targets. Raw disk access may require elevated privileges, and DriveCk now opens the raw device with an exclusive lock so other tools should be closed first.
 - On Windows, mounted-volume detection maps volume mount points back to their physical drives before validation is allowed.
 - The GTK frontend is compiled only on Linux targets.
+- On Linux, the GTK frontend uses `pkexec --disable-internal-agent` for GUI privilege elevation before validation, so a running polkit authentication agent is required when the app is not already elevated.
 - The Win32 frontend is compiled only on Windows targets.
 - Validation targets must be whole block devices. Regular files and partitions are rejected.
 
