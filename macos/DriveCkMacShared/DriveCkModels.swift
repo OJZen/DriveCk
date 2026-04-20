@@ -45,6 +45,25 @@ enum DriveCkSampleStatus: String, Codable, CaseIterable, Sendable {
             return "!"
         }
     }
+
+    static func fromFFICode(_ code: Int32) -> DriveCkSampleStatus? {
+        switch code {
+        case 0:
+            return .Untested
+        case 1:
+            return .Ok
+        case 2:
+            return .ReadError
+        case 3:
+            return .WriteError
+        case 4:
+            return .VerifyMismatch
+        case 5:
+            return .RestoreError
+        default:
+            return nil
+        }
+    }
 }
 
 struct DriveCkValidationOptions: Codable, Hashable, Sendable {
@@ -89,14 +108,42 @@ struct DriveCkTargetInfo: Codable, Hashable, Identifiable, Sendable {
         return parts.joined(separator: " · ")
     }
 
+    var sidebarSubtitle: String {
+        [driveCkFormatBytes(sizeBytes), transportLabel]
+            .filter { !$0.isEmpty }
+            .joined(separator: " · ")
+    }
+
+    var shortPath: String {
+        path.split(separator: "/").last.map(String.init) ?? path
+    }
+
+    var blockSizeLabel: String {
+        "\(logicalBlockSize) B"
+    }
+
+    var readinessLabel: String {
+        isMounted ? "Mounted" : "Ready"
+    }
+
     var transportLabel: String {
         let normalized = transport.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !normalized.isEmpty else {
             return isRemovable ? "Removable" : ""
         }
+        let acronyms = [
+            "sd": "SD",
+            "ssd": "SSD",
+            "hdd": "HDD",
+            "nvme": "NVMe",
+            "usb": "USB",
+        ]
         return normalized
             .split(separator: "_")
-            .map { $0.capitalized }
+            .map { component in
+                let token = component.lowercased()
+                return acronyms[token] ?? component.capitalized
+            }
             .joined(separator: " ")
     }
 
@@ -355,6 +402,8 @@ struct DriveCkProgressSnapshot: Codable, Hashable, Sendable {
     var current: Int
     var total: Int
     var finalUpdate: Bool
+    var sampleIndex: Int? = nil
+    var sampleStatus: DriveCkSampleStatus? = nil
 
     var fraction: Double {
         guard total > 0 else {
@@ -363,6 +412,8 @@ struct DriveCkProgressSnapshot: Codable, Hashable, Sendable {
         return min(max(Double(current) / Double(total), 0), 1)
     }
 }
+
+let driveCkDefaultMapCellCount = 24 * 24
 
 struct DriveCkMapEntry: Identifiable, Hashable, Sendable {
     var id: Int

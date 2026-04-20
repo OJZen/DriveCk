@@ -173,7 +173,6 @@ pub fn validate_target_with_callbacks(
             report.cancelled = true;
             break;
         }
-
         let offset = report.sample_offsets[sample_index];
         let status = {
             let mut read_timings = Some(&mut report.read_timings);
