@@ -32,60 +32,35 @@ struct DriveCkDashboardView: View {
     }
 
     private func detailContent(for target: DriveCkTargetInfo) -> some View {
-        GeometryReader { proxy in
-            let availableWidth = max(proxy.size.width - 40, 0)
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    headerSection(target: target, availableWidth: availableWidth)
-
-                    if let inlineError = viewModel.inlineError {
-                        errorBanner(for: inlineError)
-                            .transition(.move(edge: .top).combined(with: .opacity))
-                    }
-
-                    if let response = viewModel.currentResponse {
-                        validationOverviewCard(response: response)
-                            .transition(.scale(scale: 0.98).combined(with: .opacity))
-                    }
-
-                    if let statuses = viewModel.displayedMapStatuses, !statuses.isEmpty {
-                        validationMapCard(
-                            statuses: statuses,
-                            completed: viewModel.displayedMapCompletedSamples,
-                            total: max(viewModel.displayedMapTotalSamples, 1),
-                            phase: viewModel.displayedMapPhase,
-                            offsets: viewModel.displayedMapOffsets,
-                            highlightedIndex: viewModel.displayedMapHighlightedSampleIndex
-                        )
-                    } else {
-                        placeholderCard
-                    }
-
-                    if let response = viewModel.currentResponse {
-                        timingCard(report: response.report)
-                        reportCard
-                    }
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .padding(20)
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func headerSection(target: DriveCkTargetInfo, availableWidth: CGFloat) -> some View {
-        if usesSplitHeaderLayout(for: availableWidth) {
-            HStack(alignment: .top, spacing: 16) {
-                deviceOverviewCard(target: target)
-                actionCard()
-                    .frame(width: headerControlWidth(for: availableWidth))
-            }
-        } else {
+        ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 deviceOverviewCard(target: target)
-                actionCard()
+
+                if let inlineError = viewModel.inlineError {
+                    errorBanner(for: inlineError)
+                        .transition(.move(edge: .top).combined(with: .opacity))
+                }
+
+                if let statuses = viewModel.displayedMapStatuses, !statuses.isEmpty {
+                    validationMapCard(
+                        statuses: statuses,
+                        completed: viewModel.displayedMapCompletedSamples,
+                        total: max(viewModel.displayedMapTotalSamples, 1),
+                        phase: viewModel.displayedMapPhase,
+                        offsets: viewModel.displayedMapOffsets,
+                        highlightedIndex: viewModel.displayedMapHighlightedSampleIndex
+                    )
+                } else {
+                    placeholderCard
+                }
+
+                if let response = viewModel.currentResponse {
+                    timingCard(report: response.report)
+                    reportCard
+                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(20)
         }
     }
 
@@ -139,63 +114,22 @@ struct DriveCkDashboardView: View {
                     DriveCkMetricTile(title: "Capacity", value: driveCkFormatBytes(target.sizeBytes))
                     DriveCkMetricTile(title: "Block", value: target.blockSizeLabel)
                 }
+
+                ViewThatFits(in: .horizontal) {
+                    HStack(alignment: .center, spacing: 12) {
+                        statusStrip
+                        validationActionButton
+                            .frame(width: 220)
+                    }
+
+                    VStack(alignment: .leading, spacing: 12) {
+                        statusStrip
+                        validationActionButton
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private func actionCard() -> some View {
-        DriveCkCard {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("Validation")
-                    .font(.headline)
-
-                VStack(alignment: .leading, spacing: 10) {
-                    Toggle("Manual seed", isOn: $viewModel.useCustomSeed)
-                        .toggleStyle(.switch)
-                    TextField("Optional seed", text: $viewModel.seedText)
-                        .textFieldStyle(.roundedBorder)
-                        .disabled(!viewModel.useCustomSeed || viewModel.isRunning)
-                }
-
-                Button {
-                    if viewModel.isRunning {
-                        viewModel.cancelValidation()
-                    } else {
-                        viewModel.startValidation()
-                    }
-                } label: {
-                    if viewModel.isCancelling {
-                        HStack(spacing: 8) {
-                            ProgressView()
-                                .controlSize(.small)
-                            Text("Stopping…")
-                        }
-                        .frame(maxWidth: .infinity)
-                    } else {
-                        Label(
-                            viewModel.isRunning ? "Stop Validation" : "Start Validation",
-                            systemImage: viewModel.isRunning ? "stop.fill" : "play.fill"
-                        )
-                        .frame(maxWidth: .infinity)
-                    }
-                }
-                .buttonStyle(.borderedProminent)
-                .controlSize(.large)
-                .disabled(
-                    viewModel.isCancelling
-                        || (!viewModel.isRunning && !viewModel.canStartValidation)
-                )
-
-                statusStrip
-
-                if viewModel.useCustomSeed {
-                    Text(viewModel.seedText.isEmpty ? "Blank keeps automatic seed generation." : "Value is forwarded directly to the Rust validator.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-        }
     }
 
     private var statusStrip: some View {
@@ -211,6 +145,37 @@ struct DriveCkDashboardView: View {
         .padding(.vertical, 10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(statusTint.opacity(0.12), in: RoundedRectangle(cornerRadius: 14, style: .continuous))
+    }
+
+    private var validationActionButton: some View {
+        Button {
+            if viewModel.isRunning {
+                viewModel.cancelValidation()
+            } else {
+                viewModel.startValidation()
+            }
+        } label: {
+            if viewModel.isCancelling {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("Stopping…")
+                }
+                .frame(maxWidth: .infinity)
+            } else {
+                Label(
+                    viewModel.isRunning ? "Stop Validation" : "Start Validation",
+                    systemImage: viewModel.isRunning ? "stop.fill" : "play.fill"
+                )
+                .frame(maxWidth: .infinity)
+            }
+        }
+        .buttonStyle(.borderedProminent)
+        .controlSize(.large)
+        .disabled(
+            viewModel.isCancelling
+                || (!viewModel.isRunning && !viewModel.canStartValidation)
+        )
     }
 
     private func errorBanner(for error: DriveCkUserFacingError) -> some View {
@@ -237,67 +202,6 @@ struct DriveCkDashboardView: View {
         }
     }
 
-    private func validationOverviewCard(response: DriveCkValidationResponse) -> some View {
-        let report = response.report
-        let summaryBadges = reportSummaryBadges(report)
-        return DriveCkCard {
-            VStack(alignment: .leading, spacing: 18) {
-                HStack(alignment: .top, spacing: 12) {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Latest Validation")
-                            .font(.headline)
-                        Text(report.verdict)
-                            .font(.title2.weight(.semibold))
-                    }
-                    Spacer()
-                    if report.hasFailures || report.cancelled {
-                        DriveCkStatusBadge(
-                            text: report.cancelled ? "Cancelled" : "Attention",
-                            tint: report.cancelled ? .yellow : .orange
-                        )
-                    }
-                }
-
-                adaptiveMetricGrid(minimum: 160, maximum: 220) {
-                    DriveCkMetricTile(title: "Declared", value: driveCkFormatBytes(report.reportedSizeBytes))
-                    DriveCkMetricTile(title: "Validated", value: driveCkFormatBytes(report.validatedDriveSizeBytes))
-                    DriveCkMetricTile(title: "Max Region", value: driveCkFormatBytes(report.highestValidRegionBytes))
-                    DriveCkMetricTile(title: "Samples", value: "\(report.completedSamples)/\(report.sampleStatus.count)")
-                    DriveCkMetricTile(title: "Seed", value: driveCkFormatSeed(report.seed), monospaced: true)
-                }
-
-                if !summaryBadges.isEmpty {
-                    ViewThatFits(in: .horizontal) {
-                        HStack(spacing: 8) {
-                            ForEach(summaryBadges, id: \.label) { item in
-                                DriveCkStatusBadge(text: item.label, tint: item.tint)
-                            }
-                        }
-
-                        VStack(alignment: .leading, spacing: 8) {
-                            ForEach(summaryBadges, id: \.label) { item in
-                                DriveCkStatusBadge(text: item.label, tint: item.tint)
-                            }
-                        }
-                    }
-                }
-
-                ViewThatFits(in: .horizontal) {
-                    HStack(spacing: 14) {
-                        Text("Started \(driveCkFormatTimestamp(report.startedAt))")
-                        Text("Finished \(driveCkFormatTimestamp(report.finishedAt))")
-                    }
-                    VStack(alignment: .leading, spacing: 4) {
-                        Text("Started \(driveCkFormatTimestamp(report.startedAt))")
-                        Text("Finished \(driveCkFormatTimestamp(report.finishedAt))")
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-        }
-    }
-
     private func validationMapCard(
         statuses: [DriveCkSampleStatus],
         completed: Int,
@@ -306,7 +210,7 @@ struct DriveCkDashboardView: View {
         offsets: [UInt64]?,
         highlightedIndex: Int?
     ) -> some View {
-        let columns = Array(repeating: GridItem(.fixed(11), spacing: 4), count: 24)
+        let columns = Array(repeating: GridItem(.fixed(11), spacing: 4), count: driveCkMapColumnCount)
         let entries = mapEntries(for: statuses, offsets: offsets)
         return DriveCkCard {
             VStack(alignment: .leading, spacing: 16) {
@@ -513,26 +417,6 @@ struct DriveCkDashboardView: View {
         }
     }
 
-    private func reportSummaryBadges(_ report: DriveCkValidationReport) -> [(label: String, tint: Color)] {
-        var items = [(label: String, tint: Color)]()
-        if report.readErrorCount > 0 {
-            items.append(("Read \(report.readErrorCount)", .orange))
-        }
-        if report.writeErrorCount > 0 {
-            items.append(("Write \(report.writeErrorCount)", .purple))
-        }
-        if report.mismatchCount > 0 {
-            items.append(("Mismatch \(report.mismatchCount)", .red))
-        }
-        if report.restoreErrorCount > 0 {
-            items.append(("Restore \(report.restoreErrorCount)", .red))
-        }
-        if report.cancelled {
-            items.append(("Cancelled", .yellow))
-        }
-        return items
-    }
-
     private func color(for status: DriveCkSampleStatus) -> Color {
         switch status {
         case .Ok:
@@ -591,14 +475,6 @@ struct DriveCkDashboardView: View {
         }
     }
 
-    private func usesSplitHeaderLayout(for availableWidth: CGFloat) -> Bool {
-        availableWidth >= 860
-    }
-
-    private func headerControlWidth(for availableWidth: CGFloat) -> CGFloat {
-        min(max(availableWidth * 0.32, 292), 348)
-    }
-
     private func adaptiveMetricGrid<Content: View>(
         minimum: CGFloat,
         maximum: CGFloat,
@@ -627,7 +503,7 @@ private struct DriveCkMapCell: View {
 }
 
 private struct DriveCkLiveMapView: View {
-    private let columns = 24
+    private let columns = driveCkMapColumnCount
     private let cellSize: CGFloat = 11
     private let cellSpacing: CGFloat = 4
 

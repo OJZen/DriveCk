@@ -31,8 +31,6 @@ final class DriveCkCancellationFlag: @unchecked Sendable {
 final class DriveCkAppViewModel {
     var targets: [DriveCkTargetInfo] = []
     var selectedTargetID: String?
-    var useCustomSeed = false
-    var seedText = ""
     var isRefreshing = false
     var validationState: DriveCkValidationState = .idle
     var latestResult: DriveCkValidationExecutionResult?
@@ -254,19 +252,6 @@ final class DriveCkAppViewModel {
             return
         }
 
-        let seed: UInt64?
-        do {
-            if useCustomSeed {
-                let trimmed = seedText.trimmingCharacters(in: .whitespacesAndNewlines)
-                seed = trimmed.isEmpty ? nil : try driveCkParseSeed(trimmed)
-            } else {
-                seed = nil
-            }
-        } catch {
-            presentedError = DriveCkUserFacingError.from(message: error.localizedDescription)
-            return
-        }
-
         validationTask?.cancel()
         let cancellationFlag = DriveCkCancellationFlag()
         self.cancellationFlag = cancellationFlag
@@ -277,7 +262,7 @@ final class DriveCkAppViewModel {
 
         let request = DriveCkValidationRequest(
             target: target,
-            options: DriveCkValidationOptions(seed: seed)
+            options: DriveCkValidationOptions(seed: nil)
         )
         activeTarget = target
 

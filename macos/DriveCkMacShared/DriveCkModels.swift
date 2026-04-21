@@ -413,7 +413,9 @@ struct DriveCkProgressSnapshot: Codable, Hashable, Sendable {
     }
 }
 
-let driveCkDefaultMapCellCount = 24 * 24
+let driveCkMapRowCount = 18
+let driveCkMapColumnCount = 32
+let driveCkDefaultMapCellCount = driveCkMapRowCount * driveCkMapColumnCount
 
 struct DriveCkMapEntry: Identifiable, Hashable, Sendable {
     var id: Int
@@ -547,10 +549,6 @@ func driveCkFormatBytes(_ bytes: UInt64) -> String {
         unitIndex += 1
     }
     return String(format: "%.2f %@", value, units[unitIndex])
-}
-
-func driveCkFormatSeed(_ seed: UInt64) -> String {
-    String(format: "0x%016llx", seed)
 }
 
 func driveCkFormatTimestamp(_ timestamp: Int64) -> String {
