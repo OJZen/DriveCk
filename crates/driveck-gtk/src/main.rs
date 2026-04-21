@@ -229,14 +229,14 @@ mod app {
         window: ApplicationWindow,
         device_dropdown: DropDown,
         device_title_label: Label,
-        device_meta_label: Label,
-        device_path_label: Label,
+        device_size_label: Label,
+        device_transport_label: Label,
+        device_state_label: Label,
         processed_label: Label,
         ok_label: Label,
         fail_label: Label,
         refresh_button: Button,
-        validate_button: Button,
-        stop_button: Button,
+        action_button: Button,
         report_button: Button,
         status_label: Label,
         validation_map: DrawingArea,
@@ -252,6 +252,8 @@ mod app {
         helper_cancel_pipe: Option<Arc<Mutex<ChildStdin>>>,
         helper_process: Option<Arc<Mutex<Child>>>,
         helper_auth_pending: bool,
+        confirmation_pending: bool,
+        stop_requested: bool,
         closing_requested: bool,
     }
 
@@ -265,9 +267,8 @@ mod app {
         }
 
         fn update_report_button(&self) {
-            let visible = self.report_text.is_some();
-            self.report_button.set_visible(visible);
-            self.report_button.set_sensitive(!self.is_busy() && visible);
+            self.report_button
+                .set_sensitive(!self.is_busy() && self.report_text.is_some());
         }
 
         fn refresh_live_metrics(&self) {
@@ -324,16 +325,32 @@ mod app {
             let busy = self.is_busy();
             let selected = self.device_dropdown.selected() as usize;
             let can_validate = !busy
+                && !self.confirmation_pending
                 && self
                     .device_targets
                     .get(selected)
                     .is_some_and(|target| !target.is_mounted);
 
-            self.device_dropdown
-                .set_sensitive(!busy && !self.device_targets.is_empty());
-            self.refresh_button.set_sensitive(!busy);
-            self.validate_button.set_sensitive(can_validate);
-            self.stop_button.set_sensitive(busy);
+            self.device_dropdown.set_sensitive(
+                !busy && !self.confirmation_pending && !self.device_targets.is_empty(),
+            );
+            self.refresh_button
+                .set_sensitive(!busy && !self.confirmation_pending);
+            self.action_button.remove_css_class("suggested-action");
+            self.action_button.remove_css_class("destructive-action");
+            if busy {
+                self.action_button.set_label(if self.stop_requested {
+                    "Stopping..."
+                } else {
+                    "Stop"
+                });
+                self.action_button.add_css_class("destructive-action");
+                self.action_button.set_sensitive(!self.stop_requested);
+            } else {
+                self.action_button.set_label("Validate");
+                self.action_button.add_css_class("suggested-action");
+                self.action_button.set_sensitive(can_validate);
+            }
             self.update_report_button();
         }
 
@@ -379,14 +396,38 @@ mod app {
             if let Some(target) = self.device_targets.get(selected) {
                 self.device_title_label
                     .set_text(&device_display_name(target));
-                self.device_meta_label
-                    .set_text(&device_meta_text(target).replace(", ", " / "));
-                self.device_path_label.set_text(&target.path);
+                self.device_size_label
+                    .set_text(&format_bytes(target.size_bytes));
+                self.device_transport_label
+                    .set_text(device_transport_text(target));
+                self.device_state_label.set_text(if target.is_mounted {
+                    "Mounted"
+                } else {
+                    "Ready"
+                });
+                apply_chip_variant(
+                    &self.device_transport_label,
+                    if target.is_usb || target.is_removable {
+                        "metric-success"
+                    } else {
+                        "metric-neutral"
+                    },
+                );
+                apply_chip_variant(
+                    &self.device_state_label,
+                    if target.is_mounted {
+                        "metric-danger"
+                    } else {
+                        "metric-success"
+                    },
+                );
             } else {
                 self.device_title_label.set_text("No device available");
-                self.device_meta_label
-                    .set_text("Insert a removable or USB whole-disk device.");
-                self.device_path_label.set_text("");
+                self.device_size_label.set_text("No device");
+                self.device_transport_label.set_text("USB / Removable");
+                self.device_state_label.set_text("Waiting");
+                apply_chip_variant(&self.device_transport_label, "metric-neutral");
+                apply_chip_variant(&self.device_state_label, "metric-neutral");
             }
             self.update_actions();
         }
@@ -409,6 +450,8 @@ mod app {
 
         fn start_validation(&mut self, target: TargetInfo) {
             self.cancel_requested.store(false, Ordering::Relaxed);
+            self.confirmation_pending = false;
+            self.stop_requested = false;
             self.closing_requested = false;
             let started = if needs_privileged_helper() {
                 spawn_privileged_validation_worker(target)
@@ -437,7 +480,9 @@ mod app {
                     self.helper_cancel_pipe = None;
                     self.helper_process = None;
                     self.helper_auth_pending = false;
+                    self.stop_requested = false;
                     self.show_message("Cannot start validation.", &error);
+                    self.update_actions();
                 }
             }
         }
@@ -492,6 +537,8 @@ mod app {
                 self.helper_cancel_pipe = None;
                 self.helper_process = None;
                 self.helper_auth_pending = false;
+                self.confirmation_pending = false;
+                self.stop_requested = false;
 
                 self.last_target = Some(result.target.clone());
                 self.last_report = result.report.clone();
@@ -1005,23 +1052,13 @@ mod app {
         }
     }
 
-    fn device_meta_text(target: &TargetInfo) -> String {
-        let transport = match (target.is_usb, target.is_removable) {
-            (true, true) => "usb, removable",
-            (true, false) => "usb",
-            (false, true) => "removable",
-            (false, false) => "block",
-        };
-        format!(
-            "{} / {} / {}",
-            format_bytes(target.size_bytes),
-            transport,
-            if target.is_mounted {
-                "mounted"
-            } else {
-                "ready"
-            }
-        )
+    fn device_transport_text(target: &TargetInfo) -> &'static str {
+        match (target.is_usb, target.is_removable) {
+            (true, true) => "USB / Removable",
+            (true, false) => "USB",
+            (false, true) => "Removable",
+            (false, false) => "Block",
+        }
     }
 
     fn device_row_text(target: &TargetInfo) -> String {
@@ -1057,6 +1094,13 @@ mod app {
         label.add_css_class("metric-chip");
         label.add_css_class(class_name);
         label
+    }
+
+    fn apply_chip_variant(label: &Label, class_name: &str) {
+        label.remove_css_class("metric-neutral");
+        label.remove_css_class("metric-success");
+        label.remove_css_class("metric-danger");
+        label.add_css_class(class_name);
     }
 
     fn draw_validation_map(
@@ -1145,32 +1189,28 @@ mod app {
         let device_dropdown = DropDown::new(Some(device_model.clone()), None::<gtk::Expression>);
         device_dropdown.set_hexpand(true);
         let refresh_button = Button::with_label("Refresh");
-        let validate_button = Button::with_label("Validate");
-        validate_button.add_css_class("suggested-action");
-        let stop_button = Button::with_label("Stop");
-        stop_button.add_css_class("destructive-action");
+        let action_button = Button::with_label("Validate");
+        action_button.add_css_class("suggested-action");
         device_row.append(&device_dropdown);
         device_row.append(&refresh_button);
-        device_row.append(&validate_button);
-        device_row.append(&stop_button);
+        device_row.append(&action_button);
         device_panel.append(&device_row);
 
         let device_title_label = Label::new(Some("No device available"));
         device_title_label.add_css_class("device-title");
         device_title_label.set_xalign(0.0);
-        let device_meta_label = Label::new(Some("Insert a removable or USB whole-disk device."));
-        device_meta_label.add_css_class("device-meta");
-        device_meta_label.set_xalign(0.0);
-        let device_path_label = Label::new(None);
-        device_path_label.add_css_class("device-path");
-        device_path_label.set_xalign(0.0);
-        let status_label = Label::new(Some("Select a device to begin."));
-        status_label.add_css_class("status-line");
+        let device_meta_row = GtkBox::new(Orientation::Horizontal, 6);
+        let device_size_label = build_metric_chip("No device", "metric-neutral");
+        let device_transport_label = build_metric_chip("USB / Removable", "metric-neutral");
+        let device_state_label = build_metric_chip("Waiting", "metric-neutral");
+        device_meta_row.append(&device_size_label);
+        device_meta_row.append(&device_transport_label);
+        device_meta_row.append(&device_state_label);
+        let status_label = build_metric_chip("Select a device to begin.", "metric-neutral");
         status_label.set_xalign(0.0);
-        device_panel.append(&device_title_label);
-        device_panel.append(&device_meta_label);
-        device_panel.append(&device_path_label);
         device_panel.append(&status_label);
+        device_panel.append(&device_title_label);
+        device_panel.append(&device_meta_row);
         root.append(&device_panel);
 
         let map_panel = GtkBox::new(Orientation::Vertical, 8);
@@ -1227,14 +1267,14 @@ mod app {
             window,
             device_dropdown,
             device_title_label,
-            device_meta_label,
-            device_path_label,
+            device_size_label,
+            device_transport_label,
+            device_state_label,
             processed_label,
             ok_label,
             fail_label,
             refresh_button,
-            validate_button,
-            stop_button,
+            action_button,
             report_button,
             status_label,
             validation_map,
@@ -1250,6 +1290,8 @@ mod app {
             helper_cancel_pipe: None,
             helper_process: None,
             helper_auth_pending: false,
+            confirmation_pending: false,
+            stop_requested: false,
             closing_requested: false,
         }));
 
@@ -1260,8 +1302,19 @@ mod app {
         }
         {
             let state = state.clone();
-            let button = state.borrow().validate_button.clone();
+            let button = state.borrow().action_button.clone();
             button.connect_clicked(move |_| {
+                if state.borrow().is_busy() {
+                    let mut state = state.borrow_mut();
+                    if !state.stop_requested {
+                        state.stop_requested = true;
+                        state.request_stop();
+                        state.set_status("Stopping...");
+                        state.update_actions();
+                    }
+                    return;
+                }
+
                 let target = match state.borrow().prepare_selected_target() {
                     Ok(target) => target,
                     Err(error) => {
@@ -1269,6 +1322,12 @@ mod app {
                         return;
                     }
                 };
+
+                {
+                    let mut state = state.borrow_mut();
+                    state.confirmation_pending = true;
+                    state.update_actions();
+                }
 
                 let state_for_response = state.clone();
                 let dialog = MessageDialog::builder()
@@ -1297,20 +1356,12 @@ mod app {
                         glib::idle_add_local_once(move || {
                             state_for_start.borrow_mut().start_validation(target);
                         });
+                    } else if let Ok(mut state) = state_for_response.try_borrow_mut() {
+                        state.confirmation_pending = false;
+                        state.update_actions();
                     }
                 });
                 dialog.present();
-            });
-        }
-        {
-            let state = state.clone();
-            let button = state.borrow().stop_button.clone();
-            button.connect_clicked(move |_| {
-                let state = state.borrow();
-                if state.is_busy() {
-                    state.request_stop();
-                    state.set_status("Stopping...");
-                }
             });
         }
         {
@@ -1338,8 +1389,10 @@ mod app {
                     return Propagation::Proceed;
                 }
                 state.closing_requested = true;
+                state.stop_requested = true;
                 state.request_stop();
                 state.set_status("Stopping before exit...");
+                state.update_actions();
                 Propagation::Stop
             });
         }
