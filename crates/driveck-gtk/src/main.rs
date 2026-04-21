@@ -27,21 +27,21 @@ mod app {
         report_verdict, save_report, validate_target_with_callbacks,
     };
     use gtk::{
-        Align, Application, ApplicationWindow, Box as GtkBox, Button, CssProvider, Dialog,
-        DrawingArea, DropDown, FileChooserAction, FileChooserNative, Label, MessageDialog,
+        Align, Application, ApplicationWindow, AspectFrame, Box as GtkBox, Button, CssProvider,
+        Dialog, DrawingArea, DropDown, FileChooserAction, FileChooserNative, Label, MessageDialog,
         Orientation, ResponseType, STYLE_PROVIDER_PRIORITY_APPLICATION, ScrolledWindow, StringList,
         TextView, gdk,
         glib::{self, ControlFlow, Propagation},
-        pango,
         prelude::*,
         style_context_add_provider_for_display,
     };
     use serde::{Deserialize, Serialize};
 
-    const GRID_SIDE: usize = 24;
-    const GRID_SIZE: i32 = 280;
-    const GRID_GAP: f64 = 2.0;
-    const GRID_PADDING: f64 = 10.0;
+    const GRID_ROWS: usize = 18;
+    const GRID_COLUMNS: usize = 32;
+    const GRID_HEIGHT: i32 = 236;
+    const GRID_GAP: f64 = 1.0;
+    const GRID_PADDING: f64 = 6.0;
     const APP_CSS: &str = r#"
     .window-root {
         background: #f4f7fb;
@@ -293,7 +293,6 @@ mod app {
             self.last_report = None;
             self.last_target = None;
             self.set_status("Starting validation...");
-            self.report_button.set_visible(false);
             {
                 let mut grid = self.validation_grid_state.borrow_mut();
                 grid.reset();
@@ -1060,13 +1059,6 @@ mod app {
         label
     }
 
-    fn build_legend_chip(text: &str, class_name: &str) -> Label {
-        let label = Label::new(Some(text));
-        label.add_css_class("legend-chip");
-        label.add_css_class(class_name);
-        label
-    }
-
     fn draw_validation_map(
         context: &gtk::cairo::Context,
         width: i32,
@@ -1075,37 +1067,43 @@ mod app {
     ) {
         let width = width as f64;
         let height = height as f64;
-        let side = width.min(height);
-        let cell = ((side - 2.0 * GRID_PADDING - GRID_GAP * (GRID_SIDE as f64 - 1.0))
-            / GRID_SIDE as f64)
+        let cell_width = ((width - 2.0 * GRID_PADDING - GRID_GAP * (GRID_COLUMNS as f64 - 1.0))
+            / GRID_COLUMNS as f64)
             .max(1.0);
-        let grid_extent = cell * GRID_SIDE as f64 + GRID_GAP * (GRID_SIDE as f64 - 1.0);
-        let origin_x = (width - grid_extent) / 2.0;
-        let origin_y = (height - grid_extent) / 2.0;
+        let cell_height = ((height - 2.0 * GRID_PADDING - GRID_GAP * (GRID_ROWS as f64 - 1.0))
+            / GRID_ROWS as f64)
+            .max(1.0);
+        let cell = cell_width.min(cell_height);
+        let grid_width = cell * GRID_COLUMNS as f64 + GRID_GAP * (GRID_COLUMNS as f64 - 1.0);
+        let grid_height = cell * GRID_ROWS as f64 + GRID_GAP * (GRID_ROWS as f64 - 1.0);
+        let origin_x = (width - grid_width) / 2.0;
+        let origin_y = (height - grid_height) / 2.0;
 
         context.set_source_rgb(0.965, 0.972, 0.984);
         let _ = context.paint();
 
-        for row in 0..GRID_SIDE {
-            for column in 0..GRID_SIDE {
-                let index = row * GRID_SIDE + column;
+        for row in 0..GRID_ROWS {
+            for column in 0..GRID_COLUMNS {
+                let index = row * GRID_COLUMNS + column;
                 let x = origin_x + column as f64 * (cell + GRID_GAP);
                 let y = origin_y + row as f64 * (cell + GRID_GAP);
-                let status = grid_state.sample_status[index];
-                let (red, green, blue) = match status {
-                    SampleStatus::Untested => (0.84, 0.88, 0.93),
-                    SampleStatus::Ok => (0.12, 0.67, 0.39),
-                    SampleStatus::ReadError
-                    | SampleStatus::WriteError
-                    | SampleStatus::VerifyMismatch
-                    | SampleStatus::RestoreError => (0.86, 0.28, 0.29),
+                let (red, green, blue) = match grid_state.sample_status.get(index).copied() {
+                    Some(SampleStatus::Untested) => (0.84, 0.88, 0.93),
+                    Some(SampleStatus::Ok) => (0.12, 0.67, 0.39),
+                    Some(
+                        SampleStatus::ReadError
+                        | SampleStatus::WriteError
+                        | SampleStatus::VerifyMismatch
+                        | SampleStatus::RestoreError,
+                    ) => (0.86, 0.28, 0.29),
+                    None => (0.92, 0.94, 0.97),
                 };
 
                 context.set_source_rgb(red, green, blue);
                 context.rectangle(x, y, cell, cell);
                 let _ = context.fill();
 
-                if grid_state.last_sample == Some(index) {
+                if index < grid_state.sample_status.len() && grid_state.last_sample == Some(index) {
                     context.set_source_rgb(1.0, 1.0, 1.0);
                     context.set_line_width(2.0);
                     context.rectangle(
@@ -1126,9 +1124,10 @@ mod app {
         let window = ApplicationWindow::builder()
             .application(application)
             .title("DriveCk")
-            .default_width(720)
-            .default_height(600)
+            .default_width(620)
+            .default_height(580)
             .build();
+        window.set_resizable(true);
 
         let root = GtkBox::new(Orientation::Vertical, 8);
         root.add_css_class("window-root");
@@ -1165,9 +1164,6 @@ mod app {
         let device_path_label = Label::new(None);
         device_path_label.add_css_class("device-path");
         device_path_label.set_xalign(0.0);
-        device_path_label.set_wrap(false);
-        device_path_label.set_single_line_mode(true);
-        device_path_label.set_ellipsize(pango::EllipsizeMode::Middle);
         let status_label = Label::new(Some("Select a device to begin."));
         status_label.add_css_class("status-line");
         status_label.set_xalign(0.0);
@@ -1185,20 +1181,20 @@ mod app {
         map_title.add_css_class("panel-title");
         map_title.set_xalign(0.0);
         map_title.set_hexpand(true);
+        let report_button = Button::with_label("Report");
+        report_button.set_sensitive(false);
         map_top.append(&map_title);
+        map_top.append(&report_button);
         map_panel.append(&map_top);
 
-        let legend = GtkBox::new(Orientation::Horizontal, 6);
-        legend.append(&build_legend_chip("Pending", "legend-pending"));
-        legend.append(&build_legend_chip("OK", "legend-success"));
-        legend.append(&build_legend_chip("Fail", "legend-danger"));
-        map_panel.append(&legend);
-
         let validation_grid_state = Rc::new(RefCell::new(ValidationGridState::default()));
+        let map_frame = AspectFrame::new(0.5, 0.5, GRID_COLUMNS as f32 / GRID_ROWS as f32, false);
+        map_frame.set_hexpand(true);
+        map_frame.set_halign(Align::Fill);
+        map_frame.set_height_request(GRID_HEIGHT);
         let validation_map = DrawingArea::new();
-        validation_map.set_width_request(GRID_SIZE);
-        validation_map.set_height_request(GRID_SIZE);
-        validation_map.set_halign(Align::Center);
+        validation_map.set_hexpand(true);
+        validation_map.set_vexpand(true);
         {
             let validation_grid_state = validation_grid_state.clone();
             validation_map.set_draw_func(move |_, context, width, height| {
@@ -1207,23 +1203,22 @@ mod app {
                 }
             });
         }
-        map_panel.append(&validation_map);
-        let map_footer = GtkBox::new(Orientation::Horizontal, 8);
+        map_frame.set_child(Some(&validation_map));
+        map_panel.append(&map_frame);
+        let map_footer = GtkBox::new(Orientation::Vertical, 6);
         map_footer.set_hexpand(true);
         let metrics_row = GtkBox::new(Orientation::Horizontal, 8);
-        let processed_label = build_metric_chip("Done 0/576", "metric-neutral");
+        metrics_row.set_halign(Align::Center);
+        let processed_label = build_metric_chip(
+            &format!("Done 0/{}", driveck_core::DRIVECK_SAMPLE_COUNT),
+            "metric-neutral",
+        );
         let ok_label = build_metric_chip("OK 0", "metric-success");
         let fail_label = build_metric_chip("Fail 0", "metric-neutral");
         metrics_row.append(&processed_label);
         metrics_row.append(&ok_label);
         metrics_row.append(&fail_label);
-        let footer_spacer = GtkBox::new(Orientation::Horizontal, 0);
-        footer_spacer.set_hexpand(true);
-        let report_button = Button::with_label("Report");
-        report_button.set_visible(false);
         map_footer.append(&metrics_row);
-        map_footer.append(&footer_spacer);
-        map_footer.append(&report_button);
         map_panel.append(&map_footer);
         root.append(&map_panel);
         window.set_child(Some(&root));
