@@ -32,8 +32,8 @@ mod app {
         prelude::*,
         style_context_add_provider_for_display, Align, Application, ApplicationWindow, AspectFrame,
         Box as GtkBox, Button, CssProvider, Dialog, DrawingArea, DropDown, FileChooserAction,
-        FileChooserNative, Grid, Label, MessageDialog, Orientation, ResponseType, ScrolledWindow,
-        StringList, TextView, STYLE_PROVIDER_PRIORITY_APPLICATION,
+        FileChooserNative, Grid, Label, LinkButton, MessageDialog, Orientation, ResponseType,
+        ScrolledWindow, StringList, TextView, STYLE_PROVIDER_PRIORITY_APPLICATION,
     };
     use serde::{Deserialize, Serialize};
 
@@ -42,6 +42,8 @@ mod app {
     const GRID_HEIGHT: i32 = 236;
     const GRID_GAP: f64 = 1.0;
     const GRID_PADDING: f64 = 6.0;
+    const APP_VERSION: &str = "v1.0";
+    const PROJECT_URL: &str = "https://github.com/OJZen/DriveCk";
     const APP_CSS: &str = r#"
     .window-root {
         background: #f4f7fb;
@@ -120,6 +122,17 @@ mod app {
         color: #101828;
         font-size: 13px;
         font-weight: 700;
+    }
+
+    .version-link {
+        color: #98a2b3;
+        font-size: 12px;
+        font-weight: 600;
+        padding: 0;
+    }
+
+    .version-link:hover {
+        color: #667085;
     }
     "#;
 
@@ -1477,6 +1490,20 @@ mod app {
         map_footer.append(&metrics_row);
         map_panel.append(&map_footer);
         root.append(&map_panel);
+
+        let version_footer = GtkBox::new(Orientation::Horizontal, 0);
+        version_footer.set_hexpand(true);
+        version_footer.set_halign(Align::Center);
+        version_footer.set_margin_top(2);
+        let version_link = LinkButton::builder()
+            .uri(PROJECT_URL)
+            .label(format!("DriveCk {APP_VERSION}"))
+            .build();
+        version_link.add_css_class("version-link");
+        version_link.set_has_frame(false);
+        version_footer.append(&version_link);
+        root.append(&version_footer);
+
         window.set_child(Some(&root));
 
         let state = Rc::new(RefCell::new(AppState {
