@@ -13,27 +13,26 @@ mod app {
         process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio},
         rc::Rc,
         sync::{
-            Arc, Mutex,
             atomic::{AtomicBool, Ordering},
-            mpsc,
+            mpsc, Arc, Mutex,
         },
         thread::{self, JoinHandle},
         time::Duration,
     };
 
     use driveck_core::{
-        ProgressUpdate, SampleStatus, TargetInfo, ValidationFailure, ValidationOptions,
-        ValidationReport, collect_targets, discover_target, format_bytes, format_report_text,
-        report_verdict, save_report, validate_target_with_callbacks,
+        collect_targets, discover_target, format_bytes, format_report_text, report_verdict,
+        save_report, validate_target_with_callbacks, ProgressUpdate, SampleStatus, TargetInfo,
+        ValidationFailure, ValidationOptions, ValidationReport,
     };
     use gtk::{
-        Align, Application, ApplicationWindow, AspectFrame, Box as GtkBox, Button, CssProvider,
-        Dialog, DrawingArea, DropDown, FileChooserAction, FileChooserNative, Label, MessageDialog,
-        Orientation, ResponseType, STYLE_PROVIDER_PRIORITY_APPLICATION, ScrolledWindow, StringList,
-        TextView, gdk,
+        gdk,
         glib::{self, ControlFlow, Propagation},
         prelude::*,
-        style_context_add_provider_for_display,
+        style_context_add_provider_for_display, Align, Application, ApplicationWindow, AspectFrame,
+        Box as GtkBox, Button, CssProvider, Dialog, DrawingArea, DropDown, FileChooserAction,
+        FileChooserNative, Grid, Label, MessageDialog, Orientation, ResponseType, ScrolledWindow,
+        StringList, TextView, STYLE_PROVIDER_PRIORITY_APPLICATION,
     };
     use serde::{Deserialize, Serialize};
 
@@ -657,13 +656,201 @@ mod app {
         dialog.show();
     }
 
+    fn build_summary_key(text: &str) -> Label {
+        let label = Label::new(Some(text));
+        label.add_css_class("summary-key");
+        label.set_xalign(0.0);
+        label
+    }
+
+    fn build_summary_value(text: &str) -> Label {
+        let label = Label::new(Some(text));
+        label.add_css_class("summary-value");
+        label.set_xalign(0.0);
+        label.set_wrap(true);
+        label.set_selectable(true);
+        label.set_hexpand(true);
+        label
+    }
+
+    fn append_summary_pair_row(
+        grid: &Grid,
+        row: i32,
+        left_key: &str,
+        left_value: &str,
+        right_key: &str,
+        right_value: &str,
+    ) {
+        let left_key = build_summary_key(left_key);
+        let left_value = build_summary_value(left_value);
+        let right_key = build_summary_key(right_key);
+        let right_value = build_summary_value(right_value);
+        grid.attach(&left_key, 0, row, 1, 1);
+        grid.attach(&left_value, 1, row, 1, 1);
+        grid.attach(&right_key, 2, row, 1, 1);
+        grid.attach(&right_value, 3, row, 1, 1);
+    }
+
+    fn append_summary_full_row(grid: &Grid, row: i32, key: &str, value: &str) {
+        let key = build_summary_key(key);
+        let value = build_summary_value(value);
+        grid.attach(&key, 0, row, 1, 1);
+        grid.attach(&value, 1, row, 3, 1);
+    }
+
+    fn format_failure_summary(report: &ValidationReport) -> String {
+        let mut parts = Vec::new();
+        if report.read_error_count != 0 {
+            parts.push(format!("read {}", report.read_error_count));
+        }
+        if report.write_error_count != 0 {
+            parts.push(format!("write {}", report.write_error_count));
+        }
+        if report.mismatch_count != 0 {
+            parts.push(format!("mismatch {}", report.mismatch_count));
+        }
+        if report.restore_error_count != 0 {
+            parts.push(format!("restore {}", report.restore_error_count));
+        }
+        if report.cancelled {
+            parts.push("cancelled".to_string());
+        } else if !report.completed_all_samples {
+            parts.push("incomplete".to_string());
+        }
+        if parts.is_empty() {
+            "none".to_string()
+        } else {
+            parts.join(" · ")
+        }
+    }
+
+    fn report_issue_count(report: &ValidationReport) -> usize {
+        report.read_error_count
+            + report.write_error_count
+            + report.mismatch_count
+            + report.restore_error_count
+    }
+
+    fn report_verdict_class(report: &ValidationReport) -> &'static str {
+        if report_issue_count(report) != 0 {
+            "metric-danger"
+        } else if report.cancelled || !report.completed_all_samples {
+            "metric-neutral"
+        } else {
+            "metric-success"
+        }
+    }
+
+    fn report_samples_class(report: &ValidationReport) -> &'static str {
+        if report.completed_all_samples && !report.cancelled {
+            "metric-success"
+        } else {
+            "metric-neutral"
+        }
+    }
+
+    fn report_failure_chip(report: &ValidationReport) -> (String, &'static str) {
+        let failure_count = report_issue_count(report);
+        if failure_count != 0 {
+            (format!("Failures {failure_count}"), "metric-danger")
+        } else if report.cancelled {
+            ("Cancelled".to_string(), "metric-neutral")
+        } else if !report.completed_all_samples {
+            ("Incomplete".to_string(), "metric-neutral")
+        } else {
+            ("No failures".to_string(), "metric-success")
+        }
+    }
+
+    fn build_report_summary(
+        target: Option<&TargetInfo>,
+        report: Option<&ValidationReport>,
+    ) -> GtkBox {
+        let summary_box = GtkBox::new(Orientation::Vertical, 8);
+        summary_box.add_css_class("panel");
+
+        let summary_title = Label::new(Some("Summary"));
+        summary_title.add_css_class("panel-title");
+        summary_title.set_xalign(0.0);
+        summary_box.append(&summary_title);
+
+        let grid = Grid::new();
+        grid.set_column_spacing(14);
+        grid.set_row_spacing(10);
+        grid.set_hexpand(true);
+
+        if let Some(report) = report {
+            let target_path = target
+                .map(|target| target.path.clone())
+                .unwrap_or_else(|| "-".to_string());
+            let samples = format!(
+                "Samples {}/{}",
+                report.completed_samples,
+                driveck_core::DRIVECK_SAMPLE_COUNT
+            );
+            let failure_detail = format_failure_summary(report);
+            let emphasis = GtkBox::new(Orientation::Horizontal, 8);
+            emphasis.set_halign(Align::Start);
+            emphasis.append(&build_metric_chip(
+                report_verdict(report),
+                report_verdict_class(report),
+            ));
+            emphasis.append(&build_metric_chip(&samples, report_samples_class(report)));
+            let (failure_chip_text, failure_chip_class) = report_failure_chip(report);
+            emphasis.append(&build_metric_chip(&failure_chip_text, failure_chip_class));
+            summary_box.append(&emphasis);
+
+            append_summary_full_row(&grid, 0, "Target", &target_path);
+            append_summary_pair_row(
+                &grid,
+                1,
+                "Reported",
+                &format_bytes(report.reported_size_bytes),
+                "Validated",
+                &format_bytes(report.validated_drive_size_bytes),
+            );
+            append_summary_pair_row(
+                &grid,
+                2,
+                "Highest valid",
+                &format_bytes(report.highest_valid_region_bytes),
+                "Region",
+                &format_bytes(report.region_size_bytes),
+            );
+            if failure_detail != "none" {
+                append_summary_full_row(&grid, 3, "Failure detail", &failure_detail);
+            }
+        } else {
+            let target_path = target
+                .map(|target| target.path.clone())
+                .unwrap_or_else(|| "-".to_string());
+            let emphasis = GtkBox::new(Orientation::Horizontal, 8);
+            emphasis.set_halign(Align::Start);
+            emphasis.append(&build_metric_chip("Summary unavailable", "metric-neutral"));
+            summary_box.append(&emphasis);
+            append_summary_pair_row(
+                &grid,
+                0,
+                "Status",
+                "Summary unavailable",
+                "Target",
+                &target_path,
+            );
+        }
+
+        summary_box.append(&grid);
+        summary_box
+    }
+
     fn show_report_dialog(state: &Rc<RefCell<AppState>>) {
-        let (window, report_text, can_save) = {
+        let (window, report_text, target, report, can_save) = {
             let state = state.borrow();
             match state.report_text.clone() {
                 Some(report_text) => (
                     state.window.clone(),
                     report_text,
+                    state.last_target.clone(),
+                    state.last_report.clone(),
                     state.last_report.is_some() && state.last_target.is_some(),
                 ),
                 None => return,
@@ -675,17 +862,28 @@ mod app {
             .modal(true)
             .title("Detailed report")
             .default_width(760)
-            .default_height(520)
+            .default_height(620)
             .build();
-        dialog.add_button("Close", ResponseType::Close);
-        dialog.add_button("Copy", ResponseType::Apply);
-        if can_save {
-            dialog.add_button("Save report", ResponseType::Accept);
-        }
+
+        let content = dialog.content_area();
+        content.set_spacing(12);
+        content.set_margin_top(12);
+        content.set_margin_bottom(12);
+        content.set_margin_start(12);
+        content.set_margin_end(12);
+
+        let summary = build_report_summary(target.as_ref(), report.as_ref());
+        content.append(&summary);
+
+        let raw_title = Label::new(Some("Raw report"));
+        raw_title.add_css_class("panel-title");
+        raw_title.set_xalign(0.0);
+        content.append(&raw_title);
 
         let scroller = ScrolledWindow::new();
         scroller.set_hexpand(true);
         scroller.set_vexpand(true);
+        scroller.set_min_content_height(280);
         let text_view = TextView::new();
         text_view.set_editable(false);
         text_view.set_cursor_visible(false);
@@ -696,23 +894,40 @@ mod app {
         text_view.set_right_margin(10);
         text_view.buffer().set_text(&report_text);
         scroller.set_child(Some(&text_view));
-        dialog.content_area().append(&scroller);
+        content.append(&scroller);
 
-        let state = state.clone();
+        let footer = GtkBox::new(Orientation::Horizontal, 8);
+        footer.set_hexpand(true);
+        footer.set_halign(Align::End);
+        footer.set_margin_top(6);
+        footer.set_margin_bottom(2);
+
+        let copy_button = Button::with_label("Copy");
+        let close_button = Button::with_label("Close");
+        footer.append(&copy_button);
+        if can_save {
+            let save_button = Button::with_label("Save report");
+            let state_for_save = state.clone();
+            save_button.connect_clicked(move |_| {
+                show_save_report_dialog(&state_for_save);
+            });
+            footer.append(&save_button);
+        }
+        footer.append(&close_button);
+        content.append(&footer);
+
+        let state_for_copy = state.clone();
         let report_text_for_copy = report_text.clone();
-        dialog.connect_response(move |dialog, response| {
-            if response == ResponseType::Accept {
-                show_save_report_dialog(&state);
-                return;
+        copy_button.connect_clicked(move |_| {
+            if let Some(display) = gdk::Display::default() {
+                display.clipboard().set_text(&report_text_for_copy);
+                state_for_copy.borrow().set_status("Report copied.");
             }
-            if response == ResponseType::Apply {
-                if let Some(display) = gdk::Display::default() {
-                    display.clipboard().set_text(&report_text_for_copy);
-                    state.borrow().set_status("Report copied.");
-                }
-                return;
-            }
-            dialog.close();
+        });
+
+        let dialog_for_close = dialog.clone();
+        close_button.connect_clicked(move |_| {
+            dialog_for_close.close();
         });
         dialog.present();
     }
@@ -1431,7 +1646,7 @@ mod app {
 
     #[cfg(test)]
     mod tests {
-        use super::{LaunchMode, parse_launch_mode};
+        use super::{parse_launch_mode, LaunchMode};
 
         #[test]
         fn launch_mode_defaults_to_app() {
