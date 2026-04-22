@@ -1,9 +1,12 @@
 use std::{fmt::Write as _, fs, path::Path};
 
 use crate::{
-    DriveCkError, format_bytes, format_local_timestamp,
-    model::{DRIVECK_SAMPLE_COUNT, TargetInfo, TimingSeries, TimingSummary, ValidationReport},
-    report_verdict, sample_status_glyph, sample_status_name,
+    format_bytes, format_local_timestamp,
+    model::{
+        TargetInfo, TimingSeries, TimingSummary, ValidationReport, DRIVECK_MAP_COLUMNS,
+        DRIVECK_MAP_ROWS, DRIVECK_SAMPLE_COUNT,
+    },
+    report_verdict, sample_status_glyph, sample_status_name, DriveCkError,
 };
 
 pub fn summarize_timings(series: &TimingSeries, region_size_bytes: u64) -> TimingSummary {
@@ -88,12 +91,13 @@ fn write_timing_block(
 fn write_map(output: &mut String, report: &ValidationReport) {
     let _ = writeln!(
         output,
-        "Drive map (. ok, R read, W write, M mismatch, ! restore, ? untested):"
+        "Drive map ({}x{}, . ok, R read, W write, M mismatch, ! restore, ? untested):",
+        DRIVECK_MAP_ROWS, DRIVECK_MAP_COLUMNS
     );
-    for row in 0..24usize {
+    for row in 0..DRIVECK_MAP_ROWS {
         let _ = write!(output, "  {row:02} ");
-        for column in 0..24usize {
-            let index = row * 24 + column;
+        for column in 0..DRIVECK_MAP_COLUMNS {
+            let index = row * DRIVECK_MAP_COLUMNS + column;
             output.push(sample_status_glyph(report.sample_status[index]));
         }
         output.push('\n');
@@ -298,7 +302,10 @@ pub fn save_report(
 
 #[cfg(test)]
 mod tests {
-    use crate::{SampleStatus, TargetInfo, TargetKind, ValidationReport};
+    use crate::{
+        SampleStatus, TargetInfo, TargetKind, ValidationReport, DRIVECK_MAP_COLUMNS,
+        DRIVECK_SAMPLE_COUNT,
+    };
 
     #[test]
     fn formats_report_map() {
@@ -307,10 +314,10 @@ mod tests {
         report.finished_at = 2;
         report.seed = 3;
         report.region_size_bytes = 4096;
-        report.reported_size_bytes = 4096 * 576;
-        report.completed_samples = 576;
+        report.reported_size_bytes = 4096 * DRIVECK_SAMPLE_COUNT as u64;
+        report.completed_samples = DRIVECK_SAMPLE_COUNT;
         report.completed_all_samples = true;
-        report.success_count = 576;
+        report.success_count = DRIVECK_SAMPLE_COUNT;
         report.sample_status.fill(SampleStatus::Ok);
         let target = TargetInfo {
             kind: TargetKind::BlockDevice,
@@ -323,7 +330,7 @@ mod tests {
         };
 
         let text = super::format_report_text(&target, &report);
-        assert!(text.contains("Drive map"));
-        assert!(text.contains("00 ........................"));
+        assert!(text.contains("Drive map (18x32"));
+        assert!(text.contains(&format!("00 {}", ".".repeat(DRIVECK_MAP_COLUMNS))));
     }
 }

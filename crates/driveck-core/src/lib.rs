@@ -12,15 +12,15 @@ pub use formatting::{
     report_has_failures, report_verdict, right_align_cell, sample_status_glyph, sample_status_name,
 };
 pub use model::{
-    CancelObserver, DRIVECK_MAX_REGION_SIZE, DRIVECK_MIN_REGION_SIZE, DRIVECK_SAMPLE_COUNT,
-    DRIVECK_TIMING_CAPACITY, ProgressObserver, ProgressUpdate, SampleStatus, TargetInfo,
-    TargetKind, TimingSeries, TimingSummary, ValidationOptions, ValidationReport,
-    ValidationResponse,
+    CancelObserver, ProgressObserver, ProgressUpdate, SampleStatus, TargetInfo, TargetKind,
+    TimingSeries, TimingSummary, ValidationOptions, ValidationReport, ValidationResponse,
+    DRIVECK_MAP_COLUMNS, DRIVECK_MAP_ROWS, DRIVECK_MAX_REGION_SIZE, DRIVECK_MIN_REGION_SIZE,
+    DRIVECK_SAMPLE_COUNT, DRIVECK_TIMING_CAPACITY,
 };
 pub use report::{format_report_text, save_report, summarize_timings};
 pub use template::expand_template;
 pub use validation::{
-    ValidationFailure, build_sample_order, validate_target, validate_target_with_callbacks,
+    build_sample_order, validate_target, validate_target_with_callbacks, ValidationFailure,
 };
 
 pub fn collect_targets() -> Result<Vec<TargetInfo>, DriveCkError> {

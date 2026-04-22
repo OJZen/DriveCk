@@ -14,7 +14,7 @@ frontends:
 
 ## Highlights
 
-- 24 x 24 validation map with 576 sampled regions
+- 18 x 32 validation map with 576 sampled regions
 - randomized non-repeating sample order
 - read / write / read-back / restore validation cycle
 - validated-drive-size and highest-valid-region summary fields

@@ -23,7 +23,8 @@ mod app {
     use driveck_core::{
         collect_targets, discover_target, format_bytes, format_report_text, report_verdict,
         save_report, validate_target_with_callbacks, ProgressUpdate, SampleStatus, TargetInfo,
-        ValidationFailure, ValidationOptions, ValidationReport,
+        ValidationFailure, ValidationOptions, ValidationReport, DRIVECK_MAP_COLUMNS,
+        DRIVECK_MAP_ROWS,
     };
     use gtk::{
         gdk,
@@ -36,8 +37,8 @@ mod app {
     };
     use serde::{Deserialize, Serialize};
 
-    const GRID_ROWS: usize = 18;
-    const GRID_COLUMNS: usize = 32;
+    const GRID_ROWS: usize = DRIVECK_MAP_ROWS;
+    const GRID_COLUMNS: usize = DRIVECK_MAP_COLUMNS;
     const GRID_HEIGHT: i32 = 236;
     const GRID_GAP: f64 = 1.0;
     const GRID_PADDING: f64 = 6.0;
