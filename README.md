@@ -54,6 +54,7 @@ cargo build
 cargo build --workspace
 cargo test --workspace
 cargo build --release -p driveck-cli
+cargo build --release -p driveck-win32
 ```
 
 At the workspace root, `cargo build` covers the shared core and CLI by default.
@@ -65,6 +66,7 @@ frontend.
 ```bash
 ./script/build_rust.sh workspace
 ./script/build_rust.sh cli release
+./script/build_rust.sh win32 release
 ./script/build_macos_cli.sh Debug
 ./script/build_macos_app.sh Debug
 ./script/build_and_run.sh run
@@ -89,6 +91,16 @@ build, Xcode runs `macos/Scripts/build-rust-ffi.sh`, which compiles
 `crates/driveck-ffi` into a static library and links it into the native app and
 CLI.
 
+### Windows Requirements
+
+- Rust with the `x86_64-pc-windows-msvc` toolchain
+- Visual Studio 2022 or Build Tools with the **Desktop development with C++** workload
+- a shell that has the MSVC linker and Windows SDK on `PATH`, such as Developer PowerShell for VS 2022 or the x64 Native Tools Command Prompt
+
+The Win32 frontend is a native Rust application that talks to the shared engine
+through `driveck-ffi`, so Windows builds should use the MSVC toolchain rather
+than the GNU target.
+
 ### Run
 
 CLI:
@@ -109,11 +121,46 @@ When the GTK app starts a validation run on Linux, it now requests administrator
 access through a GUI `pkexec` / polkit prompt before opening the raw block
 device, unless the app is already running as root.
 
-Win32 on Windows:
+Win32 on Windows (run these from Developer PowerShell for VS 2022 or another
+shell initialized with the MSVC build environment):
 
 ```powershell
 cargo run -p driveck-win32
+cargo build --release -p driveck-win32
 ```
+
+The dashboard supports:
+
+- refreshing discovered removable and USB whole-disk targets
+- checking device size, transport, and mounted status before a run starts
+- watching a live 18 x 32 validation map, progress bar, metrics, and summary while validation is running
+- previewing and saving the shared Rust text report after the run finishes
+
+Mounted targets stay blocked until every partition or volume on the physical
+disk has been unmounted.
+
+### Windows Release Packaging
+
+This repository does not currently include a Windows installer, MSI/MSIX
+manifest, or code-signing pipeline. Today, the Windows release artifact is the
+single executable produced by Cargo:
+
+```powershell
+cargo build --release -p driveck-win32
+# artifact: target\release\driveck-win32.exe
+```
+
+The workspace release profile already enables thin LTO and symbol stripping, so
+the release executable is the intended package candidate.
+
+For manual distribution today:
+
+1. Build `target\release\driveck-win32.exe`.
+2. Put the executable in a ZIP together with the relevant README notes or a short operator guide.
+3. Test that ZIP on the target Windows environment before publishing it broadly.
+
+If you need an installer, code signing, or an enterprise deployment format,
+that still needs to be added on top of the current repository.
 
 macOS CLI from Xcode:
 
@@ -139,11 +186,11 @@ cargo check --target x86_64-pc-windows-gnu -p driveck-core -p driveck-win32
 
 ## Platform Notes
 
-- The macOS frontends are implemented in Swift and call the shared Rust engine through `driveck-ffi`.
+- The macOS frontends are implemented in Swift and the Win32 frontend is implemented in Rust, but both native frontends call the shared Rust engine through `driveck-ffi`.
 - On macOS, device discovery happens in the native Swift layer and validation is executed through FFI using the discovered `TargetInfo`.
 - The shared Rust validation engine now rejects mounted targets before opening the device, including requests that arrive through `driveck-ffi`.
 - On macOS, validation should only be run against unmounted removable whole-disk targets. Raw disk access may require elevated privileges, and DriveCk now opens the raw device with an exclusive lock so other tools should be closed first.
-- On Windows, mounted-volume detection maps volume mount points back to their physical drives before validation is allowed.
+- On Windows, mounted-volume detection maps volume mount points back to their physical drives before validation is allowed, and the Win32 dashboard now lists devices, validates targets, and renders reports through `driveck-ffi`.
 - The GTK frontend is compiled only on Linux targets.
 - On Linux, the GTK frontend uses `pkexec --disable-internal-agent` for GUI privilege elevation before validation, so a running polkit authentication agent is required when the app is not already elevated.
 - The Win32 frontend is compiled only on Windows targets.

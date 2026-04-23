@@ -2,8 +2,8 @@ use std::ffi::{CStr, CString, c_char, c_void};
 
 use driveck_core::{
     ProgressObserver, ProgressUpdate, TargetInfo, ValidationFailure, ValidationOptions,
-    ValidationResponse, collect_targets, discover_target, format_report_text,
-    validate_target_with_callbacks,
+    ValidationResponse, collect_targets, discover_target, format_report_text, inspect_target,
+    release_unmount_target, unmount_target, validate_target_with_callbacks,
 };
 use serde::{Deserialize, Serialize};
 
@@ -54,7 +54,10 @@ impl ProgressObserver for FfiProgress {
                     update.current,
                     update.total,
                     update.final_update,
-                    update.sample_index.map(|index| index as isize).unwrap_or(-1),
+                    update
+                        .sample_index
+                        .map(|index| index as isize)
+                        .unwrap_or(-1),
                     sample_status_code(update.sample_status),
                     self.user_data,
                 );
@@ -129,6 +132,7 @@ fn execute_validation(
         callback: progress_callback,
         user_data,
     };
+    let target_path = target.path.clone();
     let cancel_bridge = || cancel_callback.is_some_and(|callback| callback(user_data));
     let result = validate_target_with_callbacks(
         &target,
@@ -136,7 +140,7 @@ fn execute_validation(
         Some(&mut progress_bridge),
         Some(&cancel_bridge),
     );
-    Ok(match result {
+    let mut execution = match result {
         Ok(report) => ValidationExecutionResult {
             response: Some(ValidationResponse { target, report }),
             error: None,
@@ -145,7 +149,21 @@ fn execute_validation(
             response: report.map(|report| ValidationResponse { target, report }),
             error: Some(message),
         },
-    })
+    };
+    #[cfg(windows)]
+    if let Err(error) = release_unmount_target(&target_path) {
+        let message = format!(
+            "Validation completed, but DriveCk failed to release the temporary volume locks for {}: {}",
+            target_path, error.message
+        );
+        if let Some(existing) = execution.error.as_mut() {
+            existing.push_str("\r\n\r\n");
+            existing.push_str(&message);
+        } else {
+            execution.error = Some(message);
+        }
+    }
+    Ok(execution)
 }
 
 #[unsafe(no_mangle)]
@@ -168,6 +186,22 @@ pub extern "C" fn driveck_ffi_discover_target_json(path: *const c_char) -> *mut 
     response_json(
         decode_input(path, "path")
             .and_then(|path| discover_target(path).map_err(|error| error.message)),
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn driveck_ffi_inspect_target_json(path: *const c_char) -> *mut c_char {
+    response_json(
+        decode_input(path, "path")
+            .and_then(|path| inspect_target(path).map_err(|error| error.message)),
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn driveck_ffi_unmount_target_json(path: *const c_char) -> *mut c_char {
+    response_json(
+        decode_input(path, "path")
+            .and_then(|path| unmount_target(path).map_err(|error| error.message)),
     )
 }
 

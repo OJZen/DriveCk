@@ -54,3 +54,47 @@ pub(crate) fn discover_target(path: &Path) -> Result<TargetInfo, DriveCkError> {
         path.display()
     )))
 }
+
+pub(crate) fn inspect_target(path: &Path) -> Result<TargetInfo, DriveCkError> {
+    #[cfg(target_os = "linux")]
+    {
+        return linux::discover_target(path);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        return macos::discover_target(path);
+    }
+    #[cfg(windows)]
+    {
+        return windows::inspect_target(path);
+    }
+    #[allow(unreachable_code)]
+    Err(DriveCkError::new(format!(
+        "Target inspection is not implemented for {}.",
+        path.display()
+    )))
+}
+
+pub(crate) fn unmount_target(path: &Path) -> Result<TargetInfo, DriveCkError> {
+    #[cfg(target_os = "windows")]
+    {
+        return windows::unmount_target(path);
+    }
+    #[allow(unreachable_code)]
+    Err(DriveCkError::new(format!(
+        "Target unmount is not implemented for {}.",
+        path.display()
+    )))
+}
+
+pub(crate) fn release_unmount_target(path: &Path) -> Result<(), DriveCkError> {
+    #[cfg(target_os = "windows")]
+    {
+        return windows::release_unmount_target(path);
+    }
+    #[allow(unreachable_code)]
+    Err(DriveCkError::new(format!(
+        "Target unmount release is not implemented for {}.",
+        path.display()
+    )))
+}

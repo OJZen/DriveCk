@@ -1,35 +1,38 @@
 use std::{
+    collections::HashMap,
     fs::{File, OpenOptions},
     io,
     mem::size_of,
     os::windows::{
         ffi::OsStrExt,
         fs::{FileExt, OpenOptionsExt},
+        io::{FromRawHandle, OwnedHandle},
     },
     path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
 };
 
 use windows::{
     Win32::{
         Foundation::{
-            CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_MORE_DATA, ERROR_NO_MORE_FILES, HANDLE,
-            INVALID_HANDLE_VALUE,
+            CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_MORE_DATA, ERROR_NO_MORE_FILES,
+            ERROR_NOT_READY, HANDLE, INVALID_HANDLE_VALUE,
         },
         Storage::FileSystem::{
             BusTypeAta as BUS_TYPE_ATA, BusTypeNvme as BUS_TYPE_NVME, BusTypeSata as BUS_TYPE_SATA,
             BusTypeScsi as BUS_TYPE_SCSI, BusTypeSd as BUS_TYPE_SD, BusTypeUsb as BUS_TYPE_USB,
             CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_NO_BUFFERING, FILE_FLAG_WRITE_THROUGH,
-            FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE, FindFirstVolumeW,
-            FindNextVolumeW, FindVolumeClose, GetVolumePathNamesForVolumeNameW,
+            FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_DELETE, FILE_SHARE_READ,
+            FILE_SHARE_WRITE, FindFirstVolumeW, FindNextVolumeW, FindVolumeClose,
             IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, OPEN_EXISTING,
         },
         System::{
             IO::DeviceIoControl,
             Ioctl::{
-                DISK_EXTENT, GET_LENGTH_INFORMATION, IOCTL_DISK_GET_LENGTH_INFO,
-                IOCTL_STORAGE_QUERY_PROPERTY, PropertyStandardQuery, STORAGE_DEVICE_DESCRIPTOR,
-                STORAGE_PROPERTY_QUERY, STORAGE_QUERY_TYPE, StorageDeviceProperty,
-                VOLUME_DISK_EXTENTS,
+                DISK_EXTENT, DISK_GEOMETRY_EX, FSCTL_DISMOUNT_VOLUME, FSCTL_IS_VOLUME_MOUNTED,
+                FSCTL_LOCK_VOLUME, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, IOCTL_STORAGE_QUERY_PROPERTY,
+                PropertyStandardQuery, STORAGE_DEVICE_DESCRIPTOR, STORAGE_PROPERTY_QUERY,
+                STORAGE_QUERY_TYPE, StorageDeviceProperty, VOLUME_DISK_EXTENTS,
             },
         },
     },
@@ -37,6 +40,41 @@ use windows::{
 };
 
 use crate::{DriveCkError, TargetInfo, TargetKind};
+
+static VOLUME_LOCKS: OnceLock<Mutex<HashMap<u32, Vec<OwnedHandle>>>> = OnceLock::new();
+
+fn volume_locks() -> &'static Mutex<HashMap<u32, Vec<OwnedHandle>>> {
+    VOLUME_LOCKS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn volume_lock_exists(index: u32) -> bool {
+    match volume_locks().lock() {
+        Ok(active) => active.contains_key(&index),
+        Err(poisoned) => poisoned.into_inner().contains_key(&index),
+    }
+}
+
+fn store_volume_locks(index: u32, handles: Vec<OwnedHandle>) {
+    match volume_locks().lock() {
+        Ok(mut active) => {
+            active.insert(index, handles);
+        }
+        Err(poisoned) => {
+            poisoned.into_inner().insert(index, handles);
+        }
+    }
+}
+
+fn release_volume_locks(index: u32) {
+    match volume_locks().lock() {
+        Ok(mut active) => {
+            active.remove(&index);
+        }
+        Err(poisoned) => {
+            poisoned.into_inner().remove(&index);
+        }
+    }
+}
 
 pub(crate) struct OpenedTarget {
     file: File,
@@ -49,6 +87,14 @@ impl OpenedTarget {
         options.read(true).write(true);
 
         if target.is_block_device {
+            if let Some(index) = parse_physical_drive_index(&target.path) {
+                if is_physical_drive_mounted(index)? {
+                    return Err(DriveCkError::new(format!(
+                        "Refusing to validate {} because the disk or one of its volumes is mounted.",
+                        target.path
+                    )));
+                }
+            }
             options
                 .share_mode(FILE_SHARE_READ.0 | FILE_SHARE_WRITE.0)
                 .custom_flags(FILE_FLAG_NO_BUFFERING.0 | FILE_FLAG_WRITE_THROUGH.0);
@@ -146,6 +192,59 @@ pub(crate) fn discover_target(path: &Path) -> Result<TargetInfo, DriveCkError> {
     )))
 }
 
+pub(crate) fn inspect_target(path: &Path) -> Result<TargetInfo, DriveCkError> {
+    let path_text = path.to_string_lossy().to_string();
+    if let Some(index) = parse_physical_drive_index(&path_text) {
+        return query_physical_drive(index, false);
+    }
+
+    Err(DriveCkError::new(format!(
+        "Target {} is not a physical drive path.",
+        path.display()
+    )))
+}
+
+pub(crate) fn unmount_target(path: &Path) -> Result<TargetInfo, DriveCkError> {
+    let path_text = path.to_string_lossy().to_string();
+    let Some(index) = parse_physical_drive_index(&path_text) else {
+        return Err(DriveCkError::new(format!(
+            "Target {} is not a physical drive path.",
+            path.display()
+        )));
+    };
+
+    if !volume_lock_exists(index) {
+        let mut handles = Vec::new();
+        for volume_name in mapped_mounted_volumes(index)? {
+            handles.push(lock_volume(volume_name.as_str())?);
+        }
+        if !handles.is_empty() {
+            store_volume_locks(index, handles);
+        }
+    }
+
+    match query_physical_drive(index, true) {
+        Ok(target) => Ok(target),
+        Err(error) => {
+            release_volume_locks(index);
+            Err(error)
+        }
+    }
+}
+
+pub(crate) fn release_unmount_target(path: &Path) -> Result<(), DriveCkError> {
+    let path_text = path.to_string_lossy().to_string();
+    let Some(index) = parse_physical_drive_index(&path_text) else {
+        return Err(DriveCkError::new(format!(
+            "Target {} is not a physical drive path.",
+            path.display()
+        )));
+    };
+
+    release_volume_locks(index);
+    Ok(())
+}
+
 fn query_physical_drive(index: u32, reject_mounted: bool) -> Result<TargetInfo, DriveCkError> {
     let path = format!(r"\\.\PhysicalDrive{index}");
     let handle = open_metadata_handle(&path)?;
@@ -194,9 +293,7 @@ fn open_metadata_handle(path: &str) -> Result<HANDLE, DriveCkError> {
     let handle = unsafe {
         CreateFileW(
             PCWSTR(wide.as_ptr()),
-            (windows::Win32::Storage::FileSystem::FILE_GENERIC_READ
-                | windows::Win32::Storage::FileSystem::FILE_GENERIC_WRITE)
-                .0,
+            0,
             FILE_SHARE_READ | FILE_SHARE_WRITE,
             None,
             OPEN_EXISTING,
@@ -217,22 +314,27 @@ fn open_metadata_handle(path: &str) -> Result<HANDLE, DriveCkError> {
 }
 
 fn query_capacity(handle: HANDLE) -> Option<u64> {
-    let mut output = GET_LENGTH_INFORMATION::default();
+    let mut buffer = [0u8; 256];
     let mut bytes_returned = 0u32;
     let success = unsafe {
         DeviceIoControl(
             handle,
-            IOCTL_DISK_GET_LENGTH_INFO,
+            IOCTL_DISK_GET_DRIVE_GEOMETRY_EX,
             None,
             0,
-            Some((&mut output as *mut GET_LENGTH_INFORMATION).cast()),
-            size_of::<GET_LENGTH_INFORMATION>() as u32,
+            Some(buffer.as_mut_ptr().cast()),
+            buffer.len() as u32,
             Some(&mut bytes_returned),
             None,
         )
     }
     .is_ok();
-    success.then_some(output.Length as u64)
+    if !success || bytes_returned < size_of::<DISK_GEOMETRY_EX>() as u32 {
+        return None;
+    }
+
+    let geometry = unsafe { &*(buffer.as_ptr().cast::<DISK_GEOMETRY_EX>()) };
+    Some(geometry.DiskSize as u64)
 }
 
 fn query_descriptor(handle: HANDLE) -> Option<DescriptorInfo> {
@@ -283,7 +385,24 @@ fn query_descriptor(handle: HANDLE) -> Option<DescriptorInfo> {
     })
 }
 
+fn mapped_mounted_volumes(index: u32) -> Result<Vec<String>, DriveCkError> {
+    let mut volumes = Vec::new();
+    for volume_name in list_volume_names()? {
+        if volume_maps_to_disk(&volume_name, index)? && is_volume_mounted(&volume_name)? {
+            volumes.push(volume_name);
+        }
+    }
+    Ok(volumes)
+}
+
 fn is_physical_drive_mounted(index: u32) -> Result<bool, DriveCkError> {
+    if volume_lock_exists(index) {
+        return Ok(false);
+    }
+    Ok(!mapped_mounted_volumes(index)?.is_empty())
+}
+
+fn list_volume_names() -> Result<Vec<String>, DriveCkError> {
     let mut buffer = vec![0u16; 1024];
     let handle = unsafe { FindFirstVolumeW(&mut buffer) }.map_err(|_| {
         DriveCkError::io(
@@ -292,14 +411,12 @@ fn is_physical_drive_mounted(index: u32) -> Result<bool, DriveCkError> {
         )
     })?;
 
+    let mut volumes = Vec::new();
     let result = (|| {
         loop {
             let volume_name = wide_buffer_to_string(&buffer);
-            if !volume_name.is_empty()
-                && volume_has_mount_paths(&volume_name)?
-                && volume_maps_to_disk(&volume_name, index)?
-            {
-                return Ok(true);
+            if !volume_name.is_empty() {
+                volumes.push(volume_name);
             }
 
             buffer.fill(0);
@@ -309,7 +426,7 @@ fn is_physical_drive_mounted(index: u32) -> Result<bool, DriveCkError> {
 
             let error = io::Error::last_os_error();
             if error.raw_os_error() == Some(ERROR_NO_MORE_FILES.0 as i32) {
-                return Ok(false);
+                return Ok(volumes);
             }
             return Err(DriveCkError::io(
                 "Failed to continue Windows volume enumeration",
@@ -322,46 +439,6 @@ fn is_physical_drive_mounted(index: u32) -> Result<bool, DriveCkError> {
         let _ = FindVolumeClose(handle);
     }
     result
-}
-
-fn volume_has_mount_paths(volume_name: &str) -> Result<bool, DriveCkError> {
-    let volume_name_text = volume_name.to_string();
-    let volume_name = wide(volume_name);
-    let mut required = 0u32;
-    let mut buffer = vec![0u16; 256];
-
-    loop {
-        if unsafe {
-            GetVolumePathNamesForVolumeNameW(
-                PCWSTR(volume_name.as_ptr()),
-                Some(buffer.as_mut_slice()),
-                &mut required,
-            )
-        }
-        .is_ok()
-        {
-            return Ok(buffer.first().copied().unwrap_or_default() != 0);
-        }
-
-        let error = io::Error::last_os_error();
-        match error.raw_os_error() {
-            Some(code)
-                if code == ERROR_MORE_DATA.0 as i32
-                    || code == ERROR_INSUFFICIENT_BUFFER.0 as i32 =>
-            {
-                let next_len = required
-                    .max((buffer.len() as u32).saturating_mul(2))
-                    .max(256);
-                buffer.resize(next_len as usize, 0);
-            }
-            _ => {
-                return Err(DriveCkError::io(
-                    format!("Failed to query mount paths for {volume_name_text}"),
-                    error,
-                ));
-            }
-        }
-    }
 }
 
 fn volume_maps_to_disk(volume_name: &str, index: u32) -> Result<bool, DriveCkError> {
@@ -378,12 +455,19 @@ fn volume_maps_to_disk(volume_name: &str, index: u32) -> Result<bool, DriveCkErr
 }
 
 fn open_volume_handle(volume_name: &str) -> Result<HANDLE, DriveCkError> {
+    open_volume_handle_with_access(volume_name, 0)
+}
+
+fn open_volume_handle_with_access(
+    volume_name: &str,
+    desired_access: u32,
+) -> Result<HANDLE, DriveCkError> {
     let path = volume_name.trim_end_matches('\\');
     let wide = wide(path);
     let handle = unsafe {
         CreateFileW(
             PCWSTR(wide.as_ptr()),
-            0,
+            desired_access,
             FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE,
             None,
             OPEN_EXISTING,
@@ -405,6 +489,105 @@ fn open_volume_handle(volume_name: &str) -> Result<HANDLE, DriveCkError> {
         ))
     } else {
         Ok(handle)
+    }
+}
+
+fn is_volume_mounted(volume_name: &str) -> Result<bool, DriveCkError> {
+    let handle = open_volume_handle_with_access(volume_name, FILE_GENERIC_READ.0)?;
+    let mut bytes_returned = 0u32;
+    let mounted = unsafe {
+        DeviceIoControl(
+            handle,
+            FSCTL_IS_VOLUME_MOUNTED,
+            None,
+            0,
+            None,
+            0,
+            Some(&mut bytes_returned),
+            None,
+        )
+    }
+    .is_ok();
+    let error = if mounted {
+        None
+    } else {
+        Some(io::Error::last_os_error())
+    };
+    unsafe {
+        let _ = CloseHandle(handle);
+    }
+
+    if mounted {
+        Ok(true)
+    } else if error.as_ref().and_then(|value| value.raw_os_error())
+        == Some(ERROR_NOT_READY.0 as i32)
+    {
+        Ok(false)
+    } else {
+        Err(DriveCkError::io(
+            format!("Failed to query mount state for {volume_name}"),
+            error.unwrap_or_else(io::Error::last_os_error),
+        ))
+    }
+}
+
+fn lock_volume(volume_name: &str) -> Result<OwnedHandle, DriveCkError> {
+    let handle =
+        open_volume_handle_with_access(volume_name, FILE_GENERIC_READ.0 | FILE_GENERIC_WRITE.0)?;
+    let result = (|| {
+        let mut bytes_returned = 0u32;
+        let locked = unsafe {
+            DeviceIoControl(
+                handle,
+                FSCTL_LOCK_VOLUME,
+                None,
+                0,
+                None,
+                0,
+                Some(&mut bytes_returned),
+                None,
+            )
+        }
+        .is_ok();
+        if !locked {
+            return Err(DriveCkError::io(
+                format!(
+                    "Failed to lock volume {volume_name}. Close any open files or Explorer windows on the disk and try again."
+                ),
+                io::Error::last_os_error(),
+            ));
+        }
+
+        let dismounted = unsafe {
+            DeviceIoControl(
+                handle,
+                FSCTL_DISMOUNT_VOLUME,
+                None,
+                0,
+                None,
+                0,
+                Some(&mut bytes_returned),
+                None,
+            )
+        }
+        .is_ok();
+        if !dismounted {
+            return Err(DriveCkError::io(
+                format!("Failed to dismount volume {volume_name}."),
+                io::Error::last_os_error(),
+            ));
+        }
+
+        Ok(())
+    })();
+    match result {
+        Ok(()) => Ok(unsafe { OwnedHandle::from_raw_handle(handle.0) }),
+        Err(error) => {
+            unsafe {
+                let _ = CloseHandle(handle);
+            }
+            Err(error)
+        }
     }
 }
 
