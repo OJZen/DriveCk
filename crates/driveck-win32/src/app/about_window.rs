@@ -25,7 +25,7 @@ pub(super) unsafe extern "system" fn about_window_proc(
             if let Some(state) = about_state_mut(hwnd) {
                 state.github_button = create_control(
                     "BUTTON",
-                    "Open GitHub",
+                    LABEL_GITHUB,
                     hwnd,
                     0,
                     0,
@@ -36,7 +36,7 @@ pub(super) unsafe extern "system" fn about_window_proc(
                 );
                 state.close_button = create_control(
                     "BUTTON",
-                    "Close",
+                    LABEL_CLOSE,
                     hwnd,
                     0,
                     0,
@@ -204,7 +204,7 @@ unsafe fn paint_about_window(hwnd: HWND, state: &AboutWindowState) {
     draw_text_block(
         back_dc,
         title_rect,
-        "DriveCk",
+        LABEL_ABOUT_TITLE,
         TEXT_PRIMARY,
         DT_LEFT | DT_SINGLELINE | DT_VCENTER,
         state.ui_font,

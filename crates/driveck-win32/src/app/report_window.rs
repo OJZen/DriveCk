@@ -45,7 +45,7 @@ pub(super) unsafe extern "system" fn report_window_proc(
                 );
                 state.copy_button = create_control(
                     "BUTTON",
-                    "Copy",
+                    LABEL_REPORT_COPY,
                     hwnd,
                     0,
                     0,
@@ -56,7 +56,7 @@ pub(super) unsafe extern "system" fn report_window_proc(
                 );
                 state.save_button = create_control(
                     "BUTTON",
-                    "Save...",
+                    LABEL_REPORT_SAVE,
                     hwnd,
                     0,
                     0,
@@ -67,7 +67,7 @@ pub(super) unsafe extern "system" fn report_window_proc(
                 );
                 state.close_button = create_control(
                     "BUTTON",
-                    "Close",
+                    LABEL_CLOSE,
                     hwnd,
                     0,
                     0,
@@ -290,7 +290,7 @@ unsafe fn paint_report_window(hwnd: HWND, state: &ReportWindowState) {
         .response
         .as_ref()
         .map(|response| report_banner_title(&response.report))
-        .unwrap_or("Report preview");
+        .unwrap_or(LABEL_REPORT_PREVIEW);
     let subtitle = state
         .response
         .as_ref()

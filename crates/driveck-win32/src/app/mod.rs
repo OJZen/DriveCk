@@ -85,6 +85,22 @@ const MAIN_CLASS_NAME: &str = "DriveCkWin32Main";
 const REPORT_CLASS_NAME: &str = "DriveCkWin32Report";
 const ABOUT_CLASS_NAME: &str = "DriveCkWin32About";
 const APP_REPOSITORY_URL: &str = "https://github.com/OJZen/DriveCk";
+const LABEL_REFRESH: &str = "↻ Refresh";
+const LABEL_VALIDATE: &str = "▶ Validate";
+const LABEL_STOP: &str = "■ Stop";
+const LABEL_SAVE_REPORT: &str = "Save report";
+const LABEL_OPEN_REPORT: &str = "Open report";
+const LABEL_ABOUT: &str = "ⓘ About";
+const LABEL_PANEL_MAP: &str = "Validation Map";
+const LABEL_PANEL_REPORT: &str = "Report";
+const LABEL_IDLE_BANNER: &str = "Not validated yet";
+const LABEL_LIVE_BANNER: &str = "Validation in progress";
+const LABEL_REPORT_COPY: &str = "Copy";
+const LABEL_REPORT_SAVE: &str = "Save...";
+const LABEL_CLOSE: &str = "Close";
+const LABEL_GITHUB: &str = "Open GitHub";
+const LABEL_ABOUT_TITLE: &str = "DriveCk";
+const LABEL_REPORT_PREVIEW: &str = "Report preview";
 
 const IDC_DEVICE_COMBO: i32 = 100;
 const IDC_REFRESH: i32 = 101;
@@ -688,7 +704,7 @@ unsafe fn create_state(hwnd: HWND) {
     );
     let refresh_button = create_control(
         "BUTTON",
-        "Refresh",
+        LABEL_REFRESH,
         hwnd,
         0,
         0,
@@ -699,7 +715,7 @@ unsafe fn create_state(hwnd: HWND) {
     );
     let validate_button = create_control(
         "BUTTON",
-        "Validate",
+        LABEL_VALIDATE,
         hwnd,
         0,
         0,
@@ -710,7 +726,7 @@ unsafe fn create_state(hwnd: HWND) {
     );
     let stop_button = create_control(
         "BUTTON",
-        "Stop",
+        LABEL_STOP,
         hwnd,
         0,
         0,
@@ -721,7 +737,7 @@ unsafe fn create_state(hwnd: HWND) {
     );
     let save_button = create_control(
         "BUTTON",
-        "Save report",
+        LABEL_SAVE_REPORT,
         hwnd,
         0,
         0,
@@ -732,7 +748,7 @@ unsafe fn create_state(hwnd: HWND) {
     );
     let open_report_button = create_control(
         "BUTTON",
-        "Open report",
+        LABEL_OPEN_REPORT,
         hwnd,
         0,
         0,
@@ -754,7 +770,7 @@ unsafe fn create_state(hwnd: HWND) {
     );
     let about_button = create_control(
         "BUTTON",
-        "About",
+        LABEL_ABOUT,
         hwnd,
         0,
         0,
@@ -1664,7 +1680,7 @@ unsafe fn paint_validation_panel(hdc: HDC, state: &AppState, panel: &RECT) {
 }
 
 unsafe fn paint_map_panel(hdc: HDC, state: &AppState, panel: &RECT) {
-    let content = draw_panel_header(hdc, panel, "Validation Map", None, state.ui_font);
+    let content = draw_panel_header(hdc, panel, LABEL_PANEL_MAP, None, state.ui_font);
     let legend_height = 28;
     let map_rect = make_rect(
         content.left,
@@ -1752,7 +1768,7 @@ unsafe fn paint_idle_summary(hdc: HDC, state: &AppState, content: RECT) {
     draw_banner(
         hdc,
         &banner,
-        "Not validated yet",
+        LABEL_IDLE_BANNER,
         "Run validation to populate the summary and report.",
         Tone::Accent,
         state.ui_font,
@@ -1809,7 +1825,7 @@ unsafe fn paint_live_summary(hdc: HDC, state: &AppState, content: RECT) {
     draw_banner(
         hdc,
         &banner,
-        "Validation in progress",
+        LABEL_LIVE_BANNER,
         &state.current_phase,
         if state.stop_requested {
             Tone::Warning
@@ -2006,7 +2022,7 @@ unsafe fn paint_result_summary(
 }
 
 unsafe fn paint_report_panel(hdc: HDC, state: &AppState, panel: &RECT) {
-    let content = draw_panel_header(hdc, panel, "Report", None, state.ui_font);
+    let content = draw_panel_header(hdc, panel, LABEL_PANEL_REPORT, None, state.ui_font);
     let action_space = scale_for_window(state.hwnd, 52);
     let scrollbar_width = scale_for_window(state.hwnd, 14);
     let viewport = make_rect(
