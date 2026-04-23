@@ -145,6 +145,7 @@ dependencies = [
 name = "driveck-win32"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "driveck-ffi",
  "serde",
  "serde_json",
