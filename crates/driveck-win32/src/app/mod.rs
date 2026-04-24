@@ -22,7 +22,6 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use windows::{
     Win32::{
         Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
-        Globalization::GetUserDefaultUILanguage,
         Graphics::Gdi::{
             BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush,
             DRAW_TEXT_FORMAT, DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX, DT_RIGHT, DT_SINGLELINE,
@@ -109,6 +108,7 @@ const IDC_ABOUT_CLOSE: i32 = 301;
 const WM_DRIVECK_PROGRESS: u32 = WM_APP + 1;
 const WM_DRIVECK_FINISHED: u32 = WM_APP + 2;
 const CB_SETMINVISIBLE: u32 = 0x1701;
+const CB_SETITEMHEIGHT: u32 = 0x0153;
 const EM_SETSEL: u32 = 0x00B1;
 const UI_TIMER_ID: usize = 1;
 
@@ -876,6 +876,7 @@ unsafe fn create_state(hwnd: HWND) {
         apply_default_fonts(state);
         apply_visual_theme(state);
         let _ = send_message(state.device_combo, CB_SETMINVISIBLE, 12, 0);
+        let _ = send_message(state.language_combo, CB_SETMINVISIBLE, 6, 0);
         populate_language_combo(state);
         send_message(state.progress_bar, PBM_SETRANGE32, 0, 1000);
         layout_child_controls(state);
@@ -883,12 +884,7 @@ unsafe fn create_state(hwnd: HWND) {
 }
 
 fn default_language() -> Language {
-    let language_id = unsafe { GetUserDefaultUILanguage() };
-    if (language_id & 0x03ff) == 0x0004 {
-        Language::SimplifiedChinese
-    } else {
-        Language::English
-    }
+    Language::English
 }
 
 unsafe fn populate_language_combo(state: &AppState) {
@@ -976,6 +972,22 @@ unsafe fn set_language(state: &mut AppState, language: Language) {
     sync_report_window_from_main_state(state);
     sync_about_window_from_main_state(state);
     let _ = InvalidateRect(Some(state.hwnd), None, true);
+}
+
+unsafe fn sync_combo_heights(state: &AppState) {
+    let layout = current_layout(state.hwnd);
+    let header_height = (rect_height(layout.refresh_button) - scale_for_window(state.hwnd, 8))
+        .max(scale_for_window(state.hwnd, 18));
+    let footer_height = (rect_height(layout.language_combo) - scale_for_window(state.hwnd, 8))
+        .max(scale_for_window(state.hwnd, 18));
+
+    for (combo, item_height) in [
+        (state.device_combo, header_height),
+        (state.language_combo, footer_height),
+    ] {
+        send_message(combo, CB_SETITEMHEIGHT, -1, item_height as isize);
+        send_message(combo, CB_SETITEMHEIGHT, 0, item_height as isize);
+    }
 }
 
 unsafe fn apply_default_fonts(state: &AppState) {
@@ -1409,6 +1421,7 @@ unsafe fn layout_child_controls(state: &mut AppState) {
             true,
         );
     }
+    sync_combo_heights(state);
     sync_report_scrollbar(state);
 }
 
