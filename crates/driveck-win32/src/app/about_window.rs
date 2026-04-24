@@ -7,6 +7,7 @@ struct AboutWindowState {
     github_button: HWND,
     close_button: HWND,
     ui_font: HGDIOBJ,
+    language: Language,
 }
 
 pub(super) unsafe extern "system" fn about_window_proc(
@@ -25,7 +26,7 @@ pub(super) unsafe extern "system" fn about_window_proc(
             if let Some(state) = about_state_mut(hwnd) {
                 state.github_button = create_control(
                     "BUTTON",
-                    LABEL_GITHUB,
+                    open_github_button_text(state.language),
                     hwnd,
                     0,
                     0,
@@ -36,7 +37,7 @@ pub(super) unsafe extern "system" fn about_window_proc(
                 );
                 state.close_button = create_control(
                     "BUTTON",
-                    LABEL_CLOSE,
+                    close_button_text(state.language),
                     hwnd,
                     0,
                     0,
@@ -118,6 +119,7 @@ pub(super) unsafe extern "system" fn about_window_proc(
 
 pub(super) unsafe fn open_about_window(state: &mut AppState) {
     if let Some(hwnd) = state.about_window {
+        sync_about_window_from_main_state(state);
         let _ = ShowWindow(hwnd, SW_SHOW);
         let _ = SetForegroundWindow(hwnd);
         return;
@@ -128,10 +130,11 @@ pub(super) unsafe fn open_about_window(state: &mut AppState) {
         github_button: HWND::default(),
         close_button: HWND::default(),
         ui_font: state.ui_font,
+        language: state.language,
     });
 
     let class_name = wide(ABOUT_CLASS_NAME);
-    let title = wide("About Driveck");
+    let title = wide(about_window_title(state.language));
     let hwnd = CreateWindowExW(
         Default::default(),
         PCWSTR(class_name.as_ptr()),
@@ -147,10 +150,27 @@ pub(super) unsafe fn open_about_window(state: &mut AppState) {
         Some(Box::into_raw(window_state) as *const c_void),
     )
     .expect("create about window");
-    set_text(hwnd, "About Driveck");
+    set_text(hwnd, about_window_title(state.language));
     center_window(hwnd, Some(state.hwnd), 560, 380);
     state.about_window = Some(hwnd);
     let _ = ShowWindow(hwnd, SW_SHOW);
+}
+
+pub(super) unsafe fn sync_about_window_from_main_state(state: &AppState) {
+    let Some(about_hwnd) = state.about_window else {
+        return;
+    };
+    let Some(about_state) = about_state_mut(about_hwnd) else {
+        return;
+    };
+    about_state.language = state.language;
+    set_text(about_hwnd, about_window_title(state.language));
+    set_text(
+        about_state.github_button,
+        open_github_button_text(state.language),
+    );
+    set_text(about_state.close_button, close_button_text(state.language));
+    let _ = InvalidateRect(Some(about_hwnd), None, true);
 }
 
 unsafe fn layout_about_window(hwnd: HWND) {
@@ -204,7 +224,7 @@ unsafe fn paint_about_window(hwnd: HWND, state: &AboutWindowState) {
     draw_text_block(
         back_dc,
         title_rect,
-        LABEL_ABOUT_TITLE,
+        about_hero_title(state.language),
         TEXT_PRIMARY,
         DT_LEFT | DT_SINGLELINE | DT_VCENTER,
         state.ui_font,
@@ -219,7 +239,7 @@ unsafe fn paint_about_window(hwnd: HWND, state: &AboutWindowState) {
     draw_text_block(
         back_dc,
         desc_rect,
-        "Windows utility for validating removable storage capacity and integrity.",
+        about_description_text(state.language),
         TEXT_MUTED,
         DT_LEFT | DT_WORDBREAK | DT_NOPREFIX,
         state.ui_font,
@@ -227,10 +247,22 @@ unsafe fn paint_about_window(hwnd: HWND, state: &AboutWindowState) {
 
     let mut row_top = desc_rect.bottom + 14;
     for (label, value) in [
-        ("Version", env!("CARGO_PKG_VERSION").to_string()),
-        ("Frontend", "Rust + Win32".to_string()),
-        ("License", env!("CARGO_PKG_LICENSE").to_string()),
-        ("Repository", APP_REPOSITORY_URL.to_string()),
+        (
+            version_label_text(state.language),
+            env!("CARGO_PKG_VERSION").to_string(),
+        ),
+        (
+            frontend_label_text(state.language),
+            "Rust + Win32".to_string(),
+        ),
+        (
+            license_label_text(state.language),
+            env!("CARGO_PKG_LICENSE").to_string(),
+        ),
+        (
+            repository_label_text(state.language),
+            APP_REPOSITORY_URL.to_string(),
+        ),
     ] {
         draw_metric_row(
             back_dc,
@@ -246,7 +278,7 @@ unsafe fn paint_about_window(hwnd: HWND, state: &AboutWindowState) {
     draw_text_block(
         back_dc,
         note_rect,
-        "Shared Rust engine with a native Win32 dashboard, live sample map, and report viewer.",
+        about_note_text(state.language),
         TEXT_MUTED,
         DT_LEFT | DT_WORDBREAK | DT_NOPREFIX,
         state.ui_font,

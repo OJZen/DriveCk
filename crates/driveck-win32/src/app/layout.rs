@@ -21,6 +21,7 @@ pub(crate) struct Layout {
     #[allow(dead_code)]
     pub(crate) header_label: RECT,
     pub(crate) combo: RECT,
+    pub(crate) language_combo: RECT,
     pub(crate) refresh_button: RECT,
     pub(crate) validate_button: RECT,
     pub(crate) stop_button: RECT,
@@ -76,6 +77,7 @@ pub(crate) fn current_layout(hwnd: HWND) -> Layout {
     let controls_left = header_panel.left + scale_for_window(hwnd, 12);
     let controls_right = header_panel.right - scale_for_window(hwnd, 12);
     let button_gap = scale_for_window(hwnd, 8);
+    let language_width = scale_for_window(hwnd, 112);
     let refresh_width = scale_for_window(hwnd, 86);
     let validate_width = scale_for_window(hwnd, 96);
     let open_report_width = scale_for_window(hwnd, 96);
@@ -83,15 +85,22 @@ pub(crate) fn current_layout(hwnd: HWND) -> Layout {
     let about_width = scale_for_window(hwnd, 72);
     let combo_width = (controls_right
         - controls_left
-        - button_gap * 3
+        - button_gap * 4
+        - language_width
         - refresh_width
         - validate_width
         - about_width)
-        .max(scale_for_window(hwnd, 240));
+        .max(scale_for_window(hwnd, 180));
 
     let combo = make_rect(controls_left, controls_top, combo_width, control_height);
-    let refresh_button = make_rect(
+    let language_combo = make_rect(
         combo.right + button_gap,
+        controls_top,
+        language_width,
+        control_height,
+    );
+    let refresh_button = make_rect(
+        language_combo.right + button_gap,
         controls_top,
         refresh_width,
         control_height,
@@ -198,6 +207,7 @@ pub(crate) fn current_layout(hwnd: HWND) -> Layout {
         header_panel,
         header_label,
         combo,
+        language_combo,
         refresh_button,
         validate_button,
         stop_button,

@@ -22,6 +22,7 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use windows::{
     Win32::{
         Foundation::{COLORREF, HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM},
+        Globalization::GetUserDefaultUILanguage,
         Graphics::Gdi::{
             BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush,
             DRAW_TEXT_FORMAT, DT_END_ELLIPSIS, DT_LEFT, DT_NOPREFIX, DT_RIGHT, DT_SINGLELINE,
@@ -76,7 +77,7 @@ use self::layout::{
     scale_for_window, split_four,
 };
 use self::{
-    about_window::{about_window_proc, open_about_window},
+    about_window::{about_window_proc, open_about_window, sync_about_window_from_main_state},
     report_window::{open_report_window, report_window_proc, sync_report_window_from_main_state},
 };
 
@@ -85,22 +86,6 @@ const MAIN_CLASS_NAME: &str = "DriveCkWin32Main";
 const REPORT_CLASS_NAME: &str = "DriveCkWin32Report";
 const ABOUT_CLASS_NAME: &str = "DriveCkWin32About";
 const APP_REPOSITORY_URL: &str = "https://github.com/OJZen/DriveCk";
-const LABEL_REFRESH: &str = "↻ Refresh";
-const LABEL_VALIDATE: &str = "▶ Validate";
-const LABEL_STOP: &str = "■ Stop";
-const LABEL_SAVE_REPORT: &str = "Save report";
-const LABEL_OPEN_REPORT: &str = "Open report";
-const LABEL_ABOUT: &str = "ⓘ About";
-const LABEL_PANEL_MAP: &str = "Validation Map";
-const LABEL_PANEL_REPORT: &str = "Report";
-const LABEL_IDLE_BANNER: &str = "Not validated yet";
-const LABEL_LIVE_BANNER: &str = "Validation in progress";
-const LABEL_REPORT_COPY: &str = "Copy";
-const LABEL_REPORT_SAVE: &str = "Save...";
-const LABEL_CLOSE: &str = "Close";
-const LABEL_GITHUB: &str = "Open GitHub";
-const LABEL_ABOUT_TITLE: &str = "DriveCk";
-const LABEL_REPORT_PREVIEW: &str = "Report preview";
 
 const IDC_DEVICE_COMBO: i32 = 100;
 const IDC_REFRESH: i32 = 101;
@@ -111,6 +96,7 @@ const IDC_PROGRESS: i32 = 105;
 const IDC_OPEN_REPORT: i32 = 106;
 const IDC_ABOUT: i32 = 107;
 const IDC_REPORT_SCROLL: i32 = 108;
+const IDC_LANGUAGE_COMBO: i32 = 109;
 
 const IDC_REPORT_EDIT: i32 = 200;
 const IDC_REPORT_COPY: i32 = 201;
@@ -166,6 +152,35 @@ const MAP_SURFACE: COLORREF = rgb(252, 253, 255);
 enum TargetKind {
     #[default]
     BlockDevice,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Language {
+    English,
+    SimplifiedChinese,
+}
+
+impl Language {
+    fn combo_index(self) -> usize {
+        match self {
+            Self::English => 0,
+            Self::SimplifiedChinese => 1,
+        }
+    }
+
+    fn from_combo_index(index: isize) -> Self {
+        match index {
+            1 => Self::SimplifiedChinese,
+            _ => Self::English,
+        }
+    }
+
+    fn option_label(self) -> &'static str {
+        match self {
+            Self::English => "English",
+            Self::SimplifiedChinese => "简体中文",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -358,6 +373,7 @@ impl ValidationGridState {
 struct AppState {
     hwnd: HWND,
     device_combo: HWND,
+    language_combo: HWND,
     refresh_button: HWND,
     validate_button: HWND,
     stop_button: HWND,
@@ -374,6 +390,7 @@ struct AppState {
     report_text: Option<String>,
     last_response: Option<ValidationResponse>,
     last_report_target_path: Option<String>,
+    last_error: Option<String>,
     worker: Option<JoinHandle<()>>,
     cancel_requested: Arc<AtomicBool>,
     stop_requested: bool,
@@ -381,7 +398,7 @@ struct AppState {
     status_text: String,
     status_tone: Tone,
     report_scroll_offset: i32,
-    current_phase: String,
+    current_phase_raw: String,
     progress_current: usize,
     progress_total: usize,
     validation_started_at: Option<Instant>,
@@ -389,6 +406,7 @@ struct AppState {
     last_elapsed_text: Option<String>,
     report_window: Option<HWND>,
     about_window: Option<HWND>,
+    language: Language,
 }
 
 impl AppState {
@@ -430,6 +448,7 @@ struct FinishedPayload {
 struct WorkerContext {
     hwnd: HWND,
     cancel_requested: Arc<AtomicBool>,
+    language: Language,
 }
 
 pub fn run() {
@@ -560,16 +579,16 @@ unsafe extern "system" fn window_proc(
 
                 state.progress_current = payload.current;
                 state.progress_total = payload.total.max(GRID_SAMPLES);
-                state.current_phase = title_case_phrase(&payload.phase);
+                state.current_phase_raw = payload.phase.clone();
 
                 let basis_points =
                     progress_basis_points(state.progress_current, state.progress_total);
                 send_message(state.progress_bar, PBM_SETPOS, basis_points as isize, 0);
 
                 if state.stop_requested {
-                    state.set_status("Stopping", Tone::Warning);
+                    state.set_status(stopping_text(state.language), Tone::Warning);
                 } else {
-                    state.set_status("Validating", Tone::Accent);
+                    state.set_status(validating_text(state.language), Tone::Accent);
                 }
                 let _ = InvalidateRect(Some(hwnd), None, true);
             }
@@ -602,19 +621,23 @@ unsafe extern "system" fn window_proc(
                     state.validation_started_label =
                         Some(format_local_timestamp(response.report.started_at));
                     state.last_elapsed_text = Some(format_report_elapsed(&response.report));
-                    state.current_phase = if response.report.cancelled {
-                        "Cancelled".to_string()
+                    state.current_phase_raw = if response.report.cancelled {
+                        "cancelled".to_string()
                     } else if payload.error.is_some() || report_issue_count(&response.report) != 0 {
-                        "Finished with issues".to_string()
+                        "finished_with_issues".to_string()
                     } else {
-                        "Finished".to_string()
+                        "finished".to_string()
                     };
+                    state.last_error = payload.error.clone();
 
                     let basis_points =
                         progress_basis_points(response.report.completed_samples, GRID_SAMPLES);
                     send_message(state.progress_bar, PBM_SETPOS, basis_points as isize, 0);
-                    let (status_text, tone) =
-                        final_status_text(payload.error.as_deref(), &response.report);
+                    let (status_text, tone) = final_status_text(
+                        payload.error.as_deref(),
+                        &response.report,
+                        state.language,
+                    );
                     state.set_status(status_text, tone);
                 } else {
                     state.validation_started_label = None;
@@ -622,12 +645,18 @@ unsafe extern "system" fn window_proc(
                         .last_elapsed_text
                         .take()
                         .or_else(|| Some("00:00:00".to_string()));
-                    state.current_phase = "Failed".to_string();
+                    state.current_phase_raw = "failed".to_string();
+                    state.last_error = payload.error.clone();
                     if let Some(error) = payload.error.as_deref() {
-                        state.set_status("Failed", Tone::Danger);
-                        show_message(hwnd, "Validation failed.", error, MB_ICONERROR);
+                        state.set_status(failed_text(state.language), Tone::Danger);
+                        show_message(
+                            hwnd,
+                            validation_failed_title(state.language),
+                            error,
+                            MB_ICONERROR,
+                        );
                     } else {
-                        state.set_status("Finished", Tone::Neutral);
+                        state.set_status(finished_text(state.language), Tone::Neutral);
                     }
                 }
 
@@ -653,7 +682,7 @@ unsafe extern "system" fn window_proc(
             if let Some(state) = state_mut(hwnd) {
                 if state.worker.is_some() {
                     state.closing_requested = true;
-                    request_stop(state, "Stopping");
+                    request_stop(state, stopping_text(state.language));
                     return LRESULT(0);
                 }
             }
@@ -690,6 +719,7 @@ unsafe extern "system" fn window_proc(
 unsafe fn create_state(hwnd: HWND) {
     let (ui_font, owns_ui_font) = load_system_ui_font();
     let mono_font = ui_font;
+    let language = default_language();
 
     let device_combo = create_control(
         "COMBOBOX",
@@ -702,9 +732,20 @@ unsafe fn create_state(hwnd: HWND) {
         IDC_DEVICE_COMBO,
         ws(CBS_DROPDOWNLIST) | WS_TABSTOP | WS_VSCROLL,
     );
+    let language_combo = create_control(
+        "COMBOBOX",
+        "",
+        hwnd,
+        0,
+        0,
+        0,
+        0,
+        IDC_LANGUAGE_COMBO,
+        ws(CBS_DROPDOWNLIST) | WS_TABSTOP | WS_VSCROLL,
+    );
     let refresh_button = create_control(
         "BUTTON",
-        LABEL_REFRESH,
+        refresh_button_text(language),
         hwnd,
         0,
         0,
@@ -715,7 +756,7 @@ unsafe fn create_state(hwnd: HWND) {
     );
     let validate_button = create_control(
         "BUTTON",
-        LABEL_VALIDATE,
+        validate_button_text(language),
         hwnd,
         0,
         0,
@@ -726,7 +767,7 @@ unsafe fn create_state(hwnd: HWND) {
     );
     let stop_button = create_control(
         "BUTTON",
-        LABEL_STOP,
+        stop_button_text(language),
         hwnd,
         0,
         0,
@@ -737,7 +778,7 @@ unsafe fn create_state(hwnd: HWND) {
     );
     let save_button = create_control(
         "BUTTON",
-        LABEL_SAVE_REPORT,
+        save_report_button_text(language),
         hwnd,
         0,
         0,
@@ -748,7 +789,7 @@ unsafe fn create_state(hwnd: HWND) {
     );
     let open_report_button = create_control(
         "BUTTON",
-        LABEL_OPEN_REPORT,
+        open_report_button_text(language),
         hwnd,
         0,
         0,
@@ -770,7 +811,7 @@ unsafe fn create_state(hwnd: HWND) {
     );
     let about_button = create_control(
         "BUTTON",
-        LABEL_ABOUT,
+        about_button_text(language),
         hwnd,
         0,
         0,
@@ -794,6 +835,7 @@ unsafe fn create_state(hwnd: HWND) {
     let state = Box::new(AppState {
         hwnd,
         device_combo,
+        language_combo,
         refresh_button,
         validate_button,
         stop_button,
@@ -810,14 +852,15 @@ unsafe fn create_state(hwnd: HWND) {
         report_text: None,
         last_response: None,
         last_report_target_path: None,
+        last_error: None,
         worker: None,
         cancel_requested: Arc::new(AtomicBool::new(false)),
         stop_requested: false,
         closing_requested: false,
-        status_text: "Select device".to_string(),
+        status_text: select_device_text(language).to_string(),
         status_tone: Tone::Neutral,
         report_scroll_offset: 0,
-        current_phase: "Waiting to start".to_string(),
+        current_phase_raw: "waiting_to_start".to_string(),
         progress_current: 0,
         progress_total: GRID_SAMPLES,
         validation_started_at: None,
@@ -825,6 +868,7 @@ unsafe fn create_state(hwnd: HWND) {
         last_elapsed_text: Some("00:00:00".to_string()),
         report_window: None,
         about_window: None,
+        language,
     });
     SetWindowLongPtrW(hwnd, GWLP_USERDATA, Box::into_raw(state) as isize);
 
@@ -832,14 +876,112 @@ unsafe fn create_state(hwnd: HWND) {
         apply_default_fonts(state);
         apply_visual_theme(state);
         let _ = send_message(state.device_combo, CB_SETMINVISIBLE, 12, 0);
+        populate_language_combo(state);
         send_message(state.progress_bar, PBM_SETRANGE32, 0, 1000);
         layout_child_controls(state);
     }
 }
 
+fn default_language() -> Language {
+    let language_id = unsafe { GetUserDefaultUILanguage() };
+    if (language_id & 0x03ff) == 0x0004 {
+        Language::SimplifiedChinese
+    } else {
+        Language::English
+    }
+}
+
+unsafe fn populate_language_combo(state: &AppState) {
+    send_message(state.language_combo, CB_RESETCONTENT, 0, 0);
+    for option in [Language::English, Language::SimplifiedChinese] {
+        let label = wide(option.option_label());
+        send_message(
+            state.language_combo,
+            CB_ADDSTRING,
+            0,
+            label.as_ptr() as isize,
+        );
+    }
+    send_message(
+        state.language_combo,
+        CB_SETCURSEL,
+        state.language.combo_index() as isize,
+        0,
+    );
+}
+
+unsafe fn sync_device_combo_rows(state: &mut AppState) {
+    let selected = state.selected_index();
+    send_message(state.device_combo, CB_RESETCONTENT, 0, 0);
+    for target in &state.device_targets {
+        let row = wide(&device_row_text(state.language, target));
+        send_message(state.device_combo, CB_ADDSTRING, 0, row.as_ptr() as isize);
+    }
+    if let Some(selected) = selected {
+        send_message(state.device_combo, CB_SETCURSEL, selected as isize, 0);
+    }
+}
+
+unsafe fn apply_localized_text(state: &mut AppState) {
+    set_text(state.refresh_button, refresh_button_text(state.language));
+    set_text(state.validate_button, validate_button_text(state.language));
+    set_text(state.stop_button, stop_button_text(state.language));
+    set_text(state.save_button, save_report_button_text(state.language));
+    set_text(
+        state.open_report_button,
+        open_report_button_text(state.language),
+    );
+    set_text(state.about_button, about_button_text(state.language));
+    populate_language_combo(state);
+    sync_device_combo_rows(state);
+}
+
+unsafe fn refresh_localized_state_text(state: &mut AppState) {
+    if state.is_busy() {
+        if state.stop_requested {
+            state.set_status(stopping_text(state.language), Tone::Warning);
+        } else if state.current_phase_raw == "unmounting" {
+            state.set_status(unmounting_text(state.language), Tone::Warning);
+        } else {
+            state.set_status(validating_text(state.language), Tone::Accent);
+        }
+        return;
+    }
+
+    if let Some(response) = state.last_response.as_ref() {
+        let (status_text, tone) = final_status_text(
+            state.last_error.as_deref(),
+            &response.report,
+            state.language,
+        );
+        state.set_status(status_text, tone);
+        return;
+    }
+
+    if state.last_error.is_some() {
+        state.set_status(failed_text(state.language), Tone::Danger);
+        return;
+    }
+
+    update_idle_status(state);
+}
+
+unsafe fn set_language(state: &mut AppState, language: Language) {
+    if state.language == language {
+        return;
+    }
+    state.language = language;
+    apply_localized_text(state);
+    refresh_localized_state_text(state);
+    sync_report_window_from_main_state(state);
+    sync_about_window_from_main_state(state);
+    let _ = InvalidateRect(Some(state.hwnd), None, true);
+}
+
 unsafe fn apply_default_fonts(state: &AppState) {
     for hwnd in [
         state.device_combo,
+        state.language_combo,
         state.refresh_button,
         state.validate_button,
         state.stop_button,
@@ -860,6 +1002,7 @@ unsafe fn apply_visual_theme(state: &AppState) {
     let theme = wide("Explorer");
     for hwnd in [
         state.device_combo,
+        state.language_combo,
         state.refresh_button,
         state.validate_button,
         state.stop_button,
@@ -882,10 +1025,14 @@ unsafe fn handle_command(hwnd: HWND, wparam: WPARAM) {
     match control_id {
         IDC_REFRESH => refresh_devices(state),
         IDC_VALIDATE => start_validation(state),
-        IDC_STOP => request_stop(state, "Stopping"),
+        IDC_STOP => request_stop(state, stopping_text(state.language)),
         IDC_SAVE => save_current_report(state),
         IDC_OPEN_REPORT => open_report_window(state),
         IDC_ABOUT => open_about_window(state),
+        IDC_LANGUAGE_COMBO if code as u32 == CBN_SELCHANGE => {
+            let selected = send_message(state.language_combo, CB_GETCURSEL, 0, 0).0;
+            set_language(state, Language::from_combo_index(selected));
+        }
         IDC_DEVICE_COMBO if code as u32 == CBN_SELCHANGE => {
             clear_run_output_for_new_selection(state);
             update_idle_status(state);
@@ -901,11 +1048,11 @@ unsafe fn start_validation(state: &mut AppState) {
     let path = match state.selected_target() {
         Some(target) => target.path.clone(),
         None => {
-            let error = "Choose a removable or USB whole-disk device first.".to_string();
-            state.set_status("Start failed", Tone::Danger);
+            let error = choose_device_first_text(state.language).to_string();
+            state.set_status(start_failed_text(state.language), Tone::Danger);
             show_message(
                 state.hwnd,
-                "Cannot start validation.",
+                cannot_start_validation_title(state.language),
                 &error,
                 MB_ICONWARNING,
             );
@@ -917,10 +1064,10 @@ unsafe fn start_validation(state: &mut AppState) {
     let target = match ffi_inspect_target(&path) {
         Ok(target) => target,
         Err(error) => {
-            state.set_status("Start failed", Tone::Danger);
+            state.set_status(start_failed_text(state.language), Tone::Danger);
             show_message(
                 state.hwnd,
-                "Cannot start validation.",
+                cannot_start_validation_title(state.language),
                 &error,
                 MB_ICONWARNING,
             );
@@ -929,9 +1076,9 @@ unsafe fn start_validation(state: &mut AppState) {
         }
     };
 
-    let detail = build_validation_confirmation(&target);
+    let detail = build_validation_confirmation(state.language, &target);
     let detail_text = wide(&detail);
-    let title = wide("Validate selected device?");
+    let title = wide(confirm_validation_title(state.language));
     let response = MessageBoxW(
         Some(state.hwnd),
         PCWSTR(detail_text.as_ptr()),
@@ -945,10 +1092,10 @@ unsafe fn start_validation(state: &mut AppState) {
     let target = match prepare_target_for_validation(state, target) {
         Ok(target) => target,
         Err(error) => {
-            state.set_status("Start failed", Tone::Danger);
+            state.set_status(start_failed_text(state.language), Tone::Danger);
             show_message(
                 state.hwnd,
-                "Cannot start validation.",
+                cannot_start_validation_title(state.language),
                 &error,
                 MB_ICONWARNING,
             );
@@ -963,27 +1110,30 @@ unsafe fn start_validation(state: &mut AppState) {
     state.last_response = None;
     state.report_text = None;
     state.last_report_target_path = None;
+    state.last_error = None;
     state.validation_grid_state.reset();
-    state.current_phase = "Validating".to_string();
+    state.current_phase_raw = "validating".to_string();
     state.progress_current = 0;
     state.progress_total = GRID_SAMPLES;
     state.validation_started_at = Some(Instant::now());
     state.validation_started_label = Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
     state.last_elapsed_text = Some("00:00:00".to_string());
-    state.set_status("Validating", Tone::Accent);
+    state.set_status(validating_text(state.language), Tone::Accent);
     send_message(state.progress_bar, PBM_SETPOS, 0, 0);
     let _ = SetTimer(Some(state.hwnd), UI_TIMER_ID, 1000, None);
 
     let hwnd_raw = state.hwnd.0 as isize;
+    let language = state.language;
     let cancel_requested = state.cancel_requested.clone();
     state.worker = Some(thread::spawn(move || {
         let hwnd = HWND(hwnd_raw as *mut c_void);
         let context = WorkerContext {
             hwnd,
             cancel_requested,
+            language,
         };
         let result = ffi_validate_target(&target, &ValidationOptions::default(), &context);
-        let payload = Box::new(build_finished_payload(target, result));
+        let payload = Box::new(build_finished_payload(target, result, context.language));
         unsafe { post_boxed_message(hwnd, WM_DRIVECK_FINISHED, payload) };
     }));
     update_actions(state);
@@ -997,7 +1147,7 @@ unsafe fn request_stop(state: &mut AppState, status_text: &str) {
     }
     state.cancel_requested.store(true, Ordering::Relaxed);
     state.stop_requested = true;
-    state.current_phase = "Stopping".to_string();
+    state.current_phase_raw = "stopping".to_string();
     state.set_status(status_text, Tone::Warning);
     update_actions(state);
     let _ = InvalidateRect(Some(state.hwnd), None, true);
@@ -1006,6 +1156,7 @@ unsafe fn request_stop(state: &mut AppState, status_text: &str) {
 fn build_finished_payload(
     target: TargetInfo,
     result: Result<ValidationExecutionResult, String>,
+    language: Language,
 ) -> FinishedPayload {
     match result {
         Ok(execution) => {
@@ -1018,17 +1169,23 @@ fn build_finished_payload(
                             error = Some(render_error.clone());
                         }
                         Some(report_error_preview(
+                            language,
                             &response.target,
-                            &format!(
-                                "Failed to render the shared report preview.\r\n\r\n{render_error}"
-                            ),
+                            &match language {
+                                Language::English => format!(
+                                    "Failed to render the shared report preview.\r\n\r\n{render_error}"
+                                ),
+                                Language::SimplifiedChinese => {
+                                    format!("无法生成共享报告预览。\r\n\r\n{render_error}")
+                                }
+                            },
                         ))
                     }
                 }
             } else {
                 error
                     .as_deref()
-                    .map(|message| report_error_preview(&target, message))
+                    .map(|message| report_error_preview(language, &target, message))
             };
 
             FinishedPayload {
@@ -1041,7 +1198,7 @@ fn build_finished_payload(
         Err(error) => FinishedPayload {
             target_path: target.path.clone(),
             response: None,
-            report_text: Some(report_error_preview(&target, &error)),
+            report_text: Some(report_error_preview(language, &target, &error)),
             error: Some(error),
         },
     }
@@ -1052,8 +1209,8 @@ unsafe fn prepare_target_for_validation(
     mut target: TargetInfo,
 ) -> Result<TargetInfo, String> {
     if target.is_mounted {
-        state.current_phase = "Unmounting".to_string();
-        state.set_status("Unmounting", Tone::Warning);
+        state.current_phase_raw = "unmounting".to_string();
+        state.set_status(unmounting_text(state.language), Tone::Warning);
         let _ = InvalidateRect(Some(state.hwnd), None, true);
 
         target = ffi_unmount_target(&target.path)?;
@@ -1061,10 +1218,16 @@ unsafe fn prepare_target_for_validation(
     }
 
     if target.is_mounted {
-        return Err(
+        return Err(match state.language {
+            Language::English => {
                 "DriveCk could not dismount every volume on the selected disk. Close any open files and try again."
-                    .to_string(),
-            );
+                    .to_string()
+            }
+            Language::SimplifiedChinese => {
+                "DriveCk 无法卸载所选磁盘上的全部卷。请关闭所有占用该磁盘的文件后重试。"
+                    .to_string()
+            }
+        });
     }
     Ok(target)
 }
@@ -1074,10 +1237,10 @@ unsafe fn refresh_devices(state: &mut AppState) {
     let targets = match ffi_list_targets() {
         Ok(targets) => targets,
         Err(error) => {
-            state.set_status("Refresh failed", Tone::Danger);
+            state.set_status(refresh_failed_text(state.language), Tone::Danger);
             show_message(
                 state.hwnd,
-                "Failed to refresh devices.",
+                failed_to_refresh_devices_title(state.language),
                 &error,
                 MB_ICONERROR,
             );
@@ -1088,7 +1251,7 @@ unsafe fn refresh_devices(state: &mut AppState) {
 
     send_message(state.device_combo, CB_RESETCONTENT, 0, 0);
     for target in &targets {
-        let row = wide(&device_row_text(target));
+        let row = wide(&device_row_text(state.language, target));
         send_message(state.device_combo, CB_ADDSTRING, 0, row.as_ptr() as isize);
     }
 
@@ -1129,7 +1292,7 @@ unsafe fn sync_discovered_target(state: &mut AppState, target: &TargetInfo) {
     };
 
     state.device_targets[index] = target.clone();
-    let row = wide(&device_row_text(target));
+    let row = wide(&device_row_text(state.language, target));
     send_message(state.device_combo, CB_DELETESTRING, index as isize, 0);
     send_message(
         state.device_combo,
@@ -1148,10 +1311,15 @@ unsafe fn save_current_report(state: &mut AppState) {
     };
 
     match save_report_text(state.hwnd, report_text) {
-        Ok(()) => state.set_status("Saved", Tone::Success),
+        Ok(()) => state.set_status(saved_text(state.language), Tone::Success),
         Err(error) => {
-            state.set_status("Save failed", Tone::Danger);
-            show_message(state.hwnd, "Failed to save report.", &error, MB_ICONERROR);
+            state.set_status(save_failed_text(state.language), Tone::Danger);
+            show_message(
+                state.hwnd,
+                failed_to_save_report_title(state.language),
+                &error,
+                MB_ICONERROR,
+            );
         }
     }
     let _ = InvalidateRect(Some(state.hwnd), None, true);
@@ -1172,6 +1340,7 @@ unsafe fn update_actions(state: &mut AppState) {
     enable(state.save_button, report_ready);
     enable(state.open_report_button, report_ready);
     enable(state.about_button, true);
+    enable(state.language_combo, !busy);
     let _ = ShowWindow(state.validate_button, if busy { SW_HIDE } else { SW_SHOW });
     let _ = ShowWindow(state.stop_button, if busy { SW_SHOW } else { SW_HIDE });
     sync_report_scrollbar(state);
@@ -1191,7 +1360,8 @@ unsafe fn clear_run_output(state: &mut AppState) {
     state.report_text = None;
     state.last_response = None;
     state.last_report_target_path = None;
-    state.current_phase = "Waiting to start".to_string();
+    state.last_error = None;
+    state.current_phase_raw = "waiting_to_start".to_string();
     state.progress_current = 0;
     state.progress_total = GRID_SAMPLES;
     state.validation_started_at = None;
@@ -1205,10 +1375,14 @@ unsafe fn update_idle_status(state: &mut AppState) {
         return;
     }
     match state.selected_target() {
-        Some(target) if target.is_mounted => state.set_status("Will dismount", Tone::Warning),
-        Some(_) => state.set_status("Ready", Tone::Success),
-        None if state.device_targets.is_empty() => state.set_status("No device", Tone::Neutral),
-        None => state.set_status("Select device", Tone::Neutral),
+        Some(target) if target.is_mounted => {
+            state.set_status(will_dismount_text(state.language), Tone::Warning)
+        }
+        Some(_) => state.set_status(ready_text(state.language), Tone::Success),
+        None if state.device_targets.is_empty() => {
+            state.set_status(no_device_text(state.language), Tone::Neutral)
+        }
+        None => state.set_status(select_device_text(state.language), Tone::Neutral),
     }
 }
 
@@ -1216,6 +1390,7 @@ unsafe fn layout_child_controls(state: &mut AppState) {
     let layout = current_layout(state.hwnd);
     for (hwnd, rect) in [
         (state.device_combo, layout.combo),
+        (state.language_combo, layout.language_combo),
         (state.refresh_button, layout.refresh_button),
         (state.validate_button, layout.validate_button),
         (state.stop_button, layout.stop_button),
@@ -1479,7 +1654,7 @@ unsafe fn paint_header_panel(hdc: HDC, state: &AppState, layout: &Layout) {
         draw_header_metric(
             hdc,
             sections[0],
-            "Status",
+            status_label_text(state.language),
             &device_status_label(state, target),
             tone_text_color(device_status_tone(state, target)),
             state.ui_font,
@@ -1487,7 +1662,7 @@ unsafe fn paint_header_panel(hdc: HDC, state: &AppState, layout: &Layout) {
         draw_header_metric(
             hdc,
             sections[1],
-            "Model",
+            model_label_text(state.language),
             &device_display_name(target),
             TEXT_PRIMARY,
             state.ui_font,
@@ -1495,7 +1670,7 @@ unsafe fn paint_header_panel(hdc: HDC, state: &AppState, layout: &Layout) {
         draw_header_metric(
             hdc,
             sections[2],
-            "Capacity",
+            capacity_label_text(state.language),
             &format_bytes(target.size_bytes),
             TEXT_PRIMARY,
             state.ui_font,
@@ -1503,8 +1678,8 @@ unsafe fn paint_header_panel(hdc: HDC, state: &AppState, layout: &Layout) {
         draw_header_metric(
             hdc,
             sections[3],
-            "Interface",
-            &device_transport_text(target),
+            interface_label_text(state.language),
+            &device_transport_text(state.language, target),
             TEXT_PRIMARY,
             state.ui_font,
         );
@@ -1512,7 +1687,7 @@ unsafe fn paint_header_panel(hdc: HDC, state: &AppState, layout: &Layout) {
         draw_text_block(
             hdc,
             info_rect,
-            "Select a removable or USB whole-disk target.",
+            select_target_prompt(state.language),
             TEXT_MUTED,
             DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
             state.ui_font,
@@ -1524,13 +1699,19 @@ unsafe fn paint_header_panel(hdc: HDC, state: &AppState, layout: &Layout) {
 unsafe fn paint_device_panel(hdc: HDC, state: &AppState, panel: &RECT) {
     let row_height = scale_for_window(state.hwnd, 22);
     let row_gap = scale_for_window(state.hwnd, 28);
-    let content = draw_panel_header(hdc, panel, "Device", None, state.ui_font);
+    let content = draw_panel_header(
+        hdc,
+        panel,
+        device_label_text(state.language),
+        None,
+        state.ui_font,
+    );
     if let Some(target) = state.selected_target() {
         let mut row_top = content.top;
         draw_key_value_row_tone(
             hdc,
             make_rect(content.left, row_top, rect_width(content), row_height),
-            "Status",
+            status_label_text(state.language),
             &device_status_label(state, target),
             device_status_tone(state, target),
             state.ui_font,
@@ -1539,7 +1720,7 @@ unsafe fn paint_device_panel(hdc: HDC, state: &AppState, panel: &RECT) {
         draw_key_value_row(
             hdc,
             make_rect(content.left, row_top, rect_width(content), row_height),
-            "Model",
+            model_label_text(state.language),
             &device_display_name(target),
             state.ui_font,
         );
@@ -1547,7 +1728,7 @@ unsafe fn paint_device_panel(hdc: HDC, state: &AppState, panel: &RECT) {
         draw_key_value_row(
             hdc,
             make_rect(content.left, row_top, rect_width(content), row_height),
-            "Path",
+            target_label_text(state.language),
             &target.path,
             state.ui_font,
         );
@@ -1555,7 +1736,7 @@ unsafe fn paint_device_panel(hdc: HDC, state: &AppState, panel: &RECT) {
         draw_key_value_row(
             hdc,
             make_rect(content.left, row_top, rect_width(content), row_height),
-            "Capacity",
+            capacity_label_text(state.language),
             &format_bytes(target.size_bytes),
             state.ui_font,
         );
@@ -1563,15 +1744,15 @@ unsafe fn paint_device_panel(hdc: HDC, state: &AppState, panel: &RECT) {
         draw_key_value_row(
             hdc,
             make_rect(content.left, row_top, rect_width(content), row_height),
-            "Interface",
-            &device_transport_text(target),
+            interface_label_text(state.language),
+            &device_transport_text(state.language, target),
             state.ui_font,
         );
     } else {
         draw_text_block(
             hdc,
             content,
-            "No removable or USB whole-disk device is currently available.\r\n\r\nInsert a target or unmount the disk, then click Refresh.",
+            no_device_available_text(state.language),
             TEXT_MUTED,
             DT_LEFT | DT_WORDBREAK | DT_NOPREFIX,
             state.ui_font,
@@ -1581,7 +1762,13 @@ unsafe fn paint_device_panel(hdc: HDC, state: &AppState, panel: &RECT) {
 
 #[allow(dead_code)]
 unsafe fn paint_validation_panel(hdc: HDC, state: &AppState, panel: &RECT) {
-    let content = draw_panel_header(hdc, panel, "Validation", None, state.ui_font);
+    let content = draw_panel_header(
+        hdc,
+        panel,
+        validating_text(state.language),
+        None,
+        state.ui_font,
+    );
     let row_height = 24;
     let row_gap = 30;
     let mut row_top = content.top;
@@ -1590,7 +1777,7 @@ unsafe fn paint_validation_panel(hdc: HDC, state: &AppState, panel: &RECT) {
     draw_key_value_row_tone(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "Status",
+        status_label_text(state.language),
         &status_text,
         status_tone,
         state.ui_font,
@@ -1600,8 +1787,8 @@ unsafe fn paint_validation_panel(hdc: HDC, state: &AppState, panel: &RECT) {
     draw_key_value_row(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "Current stage",
-        &state.current_phase,
+        current_stage_label_text(state.language),
+        &current_phase_text(state),
         state.ui_font,
     );
     row_top += row_gap;
@@ -1609,7 +1796,7 @@ unsafe fn paint_validation_panel(hdc: HDC, state: &AppState, panel: &RECT) {
     draw_key_value_row(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "Processed",
+        processed_label_text(state.language),
         &format!("{} / {}", state.progress_current, state.progress_total),
         state.ui_font,
     );
@@ -1618,7 +1805,7 @@ unsafe fn paint_validation_panel(hdc: HDC, state: &AppState, panel: &RECT) {
     draw_key_value_row(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "Progress",
+        progress_label_text(state.language),
         &progress_percent_text(state.progress_current, state.progress_total),
         state.ui_font,
     );
@@ -1627,7 +1814,7 @@ unsafe fn paint_validation_panel(hdc: HDC, state: &AppState, panel: &RECT) {
     draw_key_value_row(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "Started",
+        started_label_text(state.language),
         state.validation_started_label.as_deref().unwrap_or("-"),
         state.ui_font,
     );
@@ -1636,7 +1823,7 @@ unsafe fn paint_validation_panel(hdc: HDC, state: &AppState, panel: &RECT) {
     draw_key_value_row(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "Elapsed",
+        elapsed_label_text(state.language),
         &current_elapsed_text(state),
         state.ui_font,
     );
@@ -1645,13 +1832,13 @@ unsafe fn paint_validation_panel(hdc: HDC, state: &AppState, panel: &RECT) {
     draw_key_value_row(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "Report",
+        report_label_text(state.language),
         if state.report_text.is_some() {
-            "Ready"
+            report_ready_text(state.language)
         } else if state.is_busy() {
-            "After completion"
+            report_after_completion_text(state.language)
         } else {
-            "Unavailable"
+            report_unavailable_text(state.language)
         },
         state.ui_font,
     );
@@ -1663,11 +1850,11 @@ unsafe fn paint_validation_panel(hdc: HDC, state: &AppState, panel: &RECT) {
         (content.bottom - row_top - 16).max(0),
     );
     let note = if state.is_busy() {
-        "Stop remains available while validation is running."
+        stop_available_note_text(state.language)
     } else if state.report_text.is_some() {
-        "The detailed shared Rust report is ready to open."
+        shared_report_ready_note_text(state.language)
     } else {
-        "Validation temporarily writes sampled regions and restores them afterwards."
+        temporary_write_note_text(state.language)
     };
     draw_text_block(
         hdc,
@@ -1680,7 +1867,13 @@ unsafe fn paint_validation_panel(hdc: HDC, state: &AppState, panel: &RECT) {
 }
 
 unsafe fn paint_map_panel(hdc: HDC, state: &AppState, panel: &RECT) {
-    let content = draw_panel_header(hdc, panel, LABEL_PANEL_MAP, None, state.ui_font);
+    let content = draw_panel_header(
+        hdc,
+        panel,
+        map_panel_title(state.language),
+        None,
+        state.ui_font,
+    );
     let legend_height = 28;
     let map_rect = make_rect(
         content.left,
@@ -1696,28 +1889,34 @@ unsafe fn paint_map_panel(hdc: HDC, state: &AppState, panel: &RECT) {
     );
 
     draw_validation_map(hdc, &map_rect, &state.validation_grid_state);
-    draw_map_legend(hdc, legend_rect, state.ui_font);
+    draw_map_legend(hdc, legend_rect, state.language, state.ui_font);
 }
 
 #[allow(dead_code)]
 unsafe fn paint_summary_panel(hdc: HDC, state: &AppState, panel: &RECT) {
-    let content = draw_panel_header(hdc, panel, "Run Status", None, state.ui_font);
+    let content = draw_panel_header(
+        hdc,
+        panel,
+        finished_with_issues_text(state.language),
+        None,
+        state.ui_font,
+    );
     let row_height = scale_for_window(state.hwnd, 22);
     let row_gap = scale_for_window(state.hwnd, 28);
     let mut row_top = content.top;
     let processed = format!("{} / {}", state.progress_current, state.progress_total);
     let report_state = if state.report_text.is_some() {
-        "Ready"
+        report_ready_text(state.language)
     } else if state.is_busy() {
-        "Pending"
+        report_pending_text(state.language)
     } else {
-        "Unavailable"
+        report_unavailable_text(state.language)
     };
 
     draw_key_value_row_tone(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "Status",
+        status_label_text(state.language),
         &validation_status_label(state),
         validation_status_tone(state),
         state.ui_font,
@@ -1726,7 +1925,7 @@ unsafe fn paint_summary_panel(hdc: HDC, state: &AppState, panel: &RECT) {
     draw_key_value_row(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "Processed",
+        processed_label_text(state.language),
         &processed,
         state.ui_font,
     );
@@ -1734,7 +1933,7 @@ unsafe fn paint_summary_panel(hdc: HDC, state: &AppState, panel: &RECT) {
     draw_key_value_row(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "Progress",
+        progress_label_text(state.language),
         &progress_percent_text(state.progress_current, state.progress_total),
         state.ui_font,
     );
@@ -1742,7 +1941,7 @@ unsafe fn paint_summary_panel(hdc: HDC, state: &AppState, panel: &RECT) {
     draw_key_value_row(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "Elapsed",
+        elapsed_label_text(state.language),
         &current_elapsed_text(state),
         state.ui_font,
     );
@@ -1750,7 +1949,7 @@ unsafe fn paint_summary_panel(hdc: HDC, state: &AppState, panel: &RECT) {
     draw_key_value_row(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "Report",
+        report_label_text(state.language),
         report_state,
         state.ui_font,
     );
@@ -1768,8 +1967,8 @@ unsafe fn paint_idle_summary(hdc: HDC, state: &AppState, content: RECT) {
     draw_banner(
         hdc,
         &banner,
-        LABEL_IDLE_BANNER,
-        "Run validation to populate the summary and report.",
+        idle_banner_title(state.language),
+        run_validation_hint_text(state.language),
         Tone::Accent,
         state.ui_font,
     );
@@ -1782,7 +1981,7 @@ unsafe fn paint_idle_summary(hdc: HDC, state: &AppState, content: RECT) {
     draw_metric_row(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "Target",
+        target_label_text(state.language),
         &target_text,
         state.ui_font,
     );
@@ -1790,23 +1989,23 @@ unsafe fn paint_idle_summary(hdc: HDC, state: &AppState, content: RECT) {
     draw_metric_row(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "Processed",
-        "0 of 576 regions",
+        processed_label_text(state.language),
+        &processed_regions_text(state.language, 0, GRID_SAMPLES),
         state.ui_font,
     );
     row_top += row_gap;
     draw_metric_row(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "Report",
-        "Unavailable",
+        report_label_text(state.language),
+        report_unavailable_text(state.language),
         state.ui_font,
     );
     row_top += row_gap;
     draw_metric_row(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "Elapsed",
+        elapsed_label_text(state.language),
         &current_elapsed_text(state),
         state.ui_font,
     );
@@ -1825,8 +2024,8 @@ unsafe fn paint_live_summary(hdc: HDC, state: &AppState, content: RECT) {
     draw_banner(
         hdc,
         &banner,
-        LABEL_LIVE_BANNER,
-        &state.current_phase,
+        live_banner_title(state.language),
+        &current_phase_text(state),
         if state.stop_requested {
             Tone::Warning
         } else {
@@ -1836,11 +2035,11 @@ unsafe fn paint_live_summary(hdc: HDC, state: &AppState, content: RECT) {
     );
 
     let mut row_top = banner.bottom + scale_for_window(state.hwnd, 10);
-    let processed = format!("{} of {} regions", counts.processed, GRID_SAMPLES);
+    let processed = processed_regions_text(state.language, counts.processed, GRID_SAMPLES);
     draw_metric_row(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "Processed",
+        processed_label_text(state.language),
         &processed,
         state.ui_font,
     );
@@ -1848,7 +2047,7 @@ unsafe fn paint_live_summary(hdc: HDC, state: &AppState, content: RECT) {
     draw_metric_row(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "Valid",
+        valid_label_text(state.language),
         &counts.ok.to_string(),
         state.ui_font,
     );
@@ -1856,7 +2055,7 @@ unsafe fn paint_live_summary(hdc: HDC, state: &AppState, content: RECT) {
     draw_metric_row(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "Invalid",
+        invalid_label_text(state.language),
         &counts.invalid.to_string(),
         state.ui_font,
     );
@@ -1864,7 +2063,7 @@ unsafe fn paint_live_summary(hdc: HDC, state: &AppState, content: RECT) {
     draw_metric_row(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "I/O errors",
+        io_errors_label_text(state.language),
         &counts.io_errors.to_string(),
         state.ui_font,
     );
@@ -1872,7 +2071,7 @@ unsafe fn paint_live_summary(hdc: HDC, state: &AppState, content: RECT) {
     draw_metric_row(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "Unvalidated",
+        unvalidated_label_text(state.language),
         &counts.untested.to_string(),
         state.ui_font,
     );
@@ -1886,7 +2085,7 @@ unsafe fn paint_live_summary(hdc: HDC, state: &AppState, content: RECT) {
     draw_metric_row(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "Elapsed time",
+        elapsed_label_text(state.language),
         &current_elapsed_text(state),
         state.ui_font,
     );
@@ -1894,8 +2093,8 @@ unsafe fn paint_live_summary(hdc: HDC, state: &AppState, content: RECT) {
     draw_metric_row(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "Report",
-        "Available after completion",
+        report_label_text(state.language),
+        report_after_completion_text(state.language),
         state.ui_font,
     );
 }
@@ -1920,18 +2119,18 @@ unsafe fn paint_result_summary(
     draw_banner(
         hdc,
         &banner,
-        report_banner_title(report),
-        report_banner_subtitle(report),
+        report_banner_title(state.language, report),
+        report_banner_subtitle(state.language, report),
         tone,
         state.ui_font,
     );
 
     let mut row_top = banner.bottom + scale_for_window(state.hwnd, 10);
-    let processed = format!("{} of {} regions", report.completed_samples, GRID_SAMPLES);
+    let processed = processed_regions_text(state.language, report.completed_samples, GRID_SAMPLES);
     draw_metric_row(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "Processed",
+        processed_label_text(state.language),
         &processed,
         state.ui_font,
     );
@@ -1939,7 +2138,7 @@ unsafe fn paint_result_summary(
     draw_metric_row(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "Valid regions",
+        valid_label_text(state.language),
         &counts.ok.to_string(),
         state.ui_font,
     );
@@ -1947,7 +2146,7 @@ unsafe fn paint_result_summary(
     draw_metric_row(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "Invalid regions",
+        invalid_label_text(state.language),
         &counts.invalid.to_string(),
         state.ui_font,
     );
@@ -1955,7 +2154,7 @@ unsafe fn paint_result_summary(
     draw_metric_row(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "I/O error regions",
+        io_errors_label_text(state.language),
         &counts.io_errors.to_string(),
         state.ui_font,
     );
@@ -1963,7 +2162,7 @@ unsafe fn paint_result_summary(
     draw_metric_row(
         hdc,
         make_rect(content.left, row_top, rect_width(content), row_height),
-        "Unvalidated regions",
+        unvalidated_label_text(state.language),
         &counts.untested.to_string(),
         state.ui_font,
     );
@@ -1976,23 +2175,32 @@ unsafe fn paint_result_summary(
     );
 
     for (label, value) in [
-        ("Failures", report_issue_count(report).to_string()),
-        ("Reported size", format_bytes(report.reported_size_bytes)),
         (
-            "Validated size",
+            failures_label_text(state.language),
+            report_issue_count(report).to_string(),
+        ),
+        (
+            reported_size_label_text(state.language),
+            format_bytes(report.reported_size_bytes),
+        ),
+        (
+            validated_size_label_text(state.language),
             format_bytes(report.validated_drive_size_bytes),
         ),
         (
-            "Highest valid region",
+            highest_valid_region_label_text(state.language),
             format_bytes(report.highest_valid_region_bytes),
         ),
-        ("Region size", format_bytes(report.region_size_bytes)),
         (
-            "Report",
+            region_size_label_text(state.language),
+            format_bytes(report.region_size_bytes),
+        ),
+        (
+            report_label_text(state.language),
             if state.report_text.is_some() {
-                "Ready".to_string()
+                report_ready_text(state.language).to_string()
             } else {
-                "Unavailable".to_string()
+                report_unavailable_text(state.language).to_string()
             },
         ),
     ] {
@@ -2006,7 +2214,7 @@ unsafe fn paint_result_summary(
         row_top += row_gap;
     }
 
-    let failure_detail = format_failure_summary(report);
+    let failure_detail = format_failure_summary(state.language, report);
     draw_metric_multiline(
         hdc,
         make_rect(
@@ -2015,14 +2223,20 @@ unsafe fn paint_result_summary(
             rect_width(content),
             scale_for_window(state.hwnd, 32),
         ),
-        "Failure detail",
+        failure_detail_label_text(state.language),
         &failure_detail,
         state.ui_font,
     );
 }
 
 unsafe fn paint_report_panel(hdc: HDC, state: &AppState, panel: &RECT) {
-    let content = draw_panel_header(hdc, panel, LABEL_PANEL_REPORT, None, state.ui_font);
+    let content = draw_panel_header(
+        hdc,
+        panel,
+        report_panel_title(state.language),
+        None,
+        state.ui_font,
+    );
     let action_space = scale_for_window(state.hwnd, 52);
     let scrollbar_width = scale_for_window(state.hwnd, 14);
     let viewport = make_rect(
@@ -2067,7 +2281,7 @@ unsafe fn paint_footer(hdc: HDC, state: &AppState, layout: &Layout) {
     draw_text_block(
         hdc,
         layout.progress_label,
-        "Progress",
+        progress_label_text(state.language),
         TEXT_MUTED,
         DT_LEFT | DT_SINGLELINE | DT_VCENTER,
         state.ui_font,
@@ -2083,7 +2297,11 @@ unsafe fn paint_footer(hdc: HDC, state: &AppState, layout: &Layout) {
     draw_text_block(
         hdc,
         layout.elapsed,
-        &format!("Elapsed: {}", current_elapsed_text(state)),
+        &format!(
+            "{}: {}",
+            elapsed_label_text(state.language),
+            current_elapsed_text(state)
+        ),
         TEXT_MUTED,
         DT_RIGHT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
         state.ui_font,
@@ -2130,12 +2348,40 @@ unsafe fn draw_validation_map(hdc: HDC, map_bounds: &RECT, grid_state: &Validati
     }
 }
 
-unsafe fn draw_map_legend(hdc: HDC, rect: RECT, font: HGDIOBJ) {
+unsafe fn draw_map_legend(hdc: HDC, rect: RECT, language: Language, font: HGDIOBJ) {
     let items = split_four(rect, 10);
-    draw_legend_item(hdc, items[0], "Valid", MAP_OK, None, font);
-    draw_legend_item(hdc, items[1], "Invalid", MAP_INVALID, None, font);
-    draw_legend_item(hdc, items[2], "I/O error", MAP_IO, None, font);
-    draw_legend_item(hdc, items[3], "Unvalidated", MAP_PENDING, None, font);
+    draw_legend_item(
+        hdc,
+        items[0],
+        valid_label_text(language),
+        MAP_OK,
+        None,
+        font,
+    );
+    draw_legend_item(
+        hdc,
+        items[1],
+        invalid_label_text(language),
+        MAP_INVALID,
+        None,
+        font,
+    );
+    draw_legend_item(
+        hdc,
+        items[2],
+        io_errors_label_text(language),
+        MAP_IO,
+        None,
+        font,
+    );
+    draw_legend_item(
+        hdc,
+        items[3],
+        unvalidated_label_text(language),
+        MAP_PENDING,
+        None,
+        font,
+    );
 }
 
 unsafe fn draw_legend_item(
@@ -2483,28 +2729,55 @@ fn counts_from_statuses(statuses: &[SampleStatus]) -> GridCounts {
     counts
 }
 
-fn build_validation_confirmation(target: &TargetInfo) -> String {
-    let mut lines = vec![
-        format!(
-            "DriveCk is about to validate {} ({}, {}).",
-            device_display_name(target),
-            format_bytes(target.size_bytes),
-            target.path
-        ),
-        String::new(),
-        "Important:".to_string(),
-        "- Sampled regions will be written temporarily and restored afterwards.".to_string(),
-        "- Close Explorer windows and any open files on the disk first.".to_string(),
-    ];
+fn build_validation_confirmation(language: Language, target: &TargetInfo) -> String {
+    let mut lines = match language {
+        Language::English => vec![
+            format!(
+                "DriveCk is about to validate {} ({}, {}).",
+                device_display_name(target),
+                format_bytes(target.size_bytes),
+                target.path
+            ),
+            String::new(),
+            "Important:".to_string(),
+            "- Sampled regions will be written temporarily and restored afterwards.".to_string(),
+            "- Close Explorer windows and any open files on the disk first.".to_string(),
+        ],
+        Language::SimplifiedChinese => vec![
+            format!(
+                "DriveCk 即将验证 {}（{}，{}）。",
+                device_display_name(target),
+                format_bytes(target.size_bytes),
+                target.path
+            ),
+            String::new(),
+            "请注意：".to_string(),
+            "- 采样区域会被临时写入，并在之后恢复原始内容。".to_string(),
+            "- 请先关闭资源管理器窗口以及磁盘上所有已打开的文件。".to_string(),
+        ],
+    };
     if target.is_mounted {
-        lines.push(
-            "- Mounted volumes on this disk will be dismounted before validation starts."
-                .to_string(),
-        );
+        lines.push(match language {
+            Language::English => {
+                "- Mounted volumes on this disk will be dismounted before validation starts."
+                    .to_string()
+            }
+            Language::SimplifiedChinese => {
+                "- 此磁盘上的已挂载卷会在验证开始前先被卸载。".to_string()
+            }
+        });
     }
-    lines.push("- A detailed text report will be available when the run finishes.".to_string());
+    lines.push(match language {
+        Language::English => {
+            "- A detailed text report will be available when the run finishes.".to_string()
+        }
+        Language::SimplifiedChinese => "- 运行结束后可查看详细文本报告。".to_string(),
+    });
     lines.push(String::new());
-    lines.push("Continue?".to_string());
+    lines.push(match language {
+        Language::English => "Continue?".to_string(),
+        Language::SimplifiedChinese => "继续吗？".to_string(),
+    });
     lines.join("\r\n")
 }
 
@@ -2549,6 +2822,635 @@ fn current_elapsed_text(state: &AppState) -> String {
             .last_elapsed_text
             .clone()
             .unwrap_or_else(|| "00:00:00".to_string())
+    }
+}
+
+fn refresh_button_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "↻ Refresh",
+        Language::SimplifiedChinese => "↻ 刷新",
+    }
+}
+
+fn validate_button_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "▶ Validate",
+        Language::SimplifiedChinese => "▶ 验证",
+    }
+}
+
+fn stop_button_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "■ Stop",
+        Language::SimplifiedChinese => "■ 停止",
+    }
+}
+
+fn save_report_button_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Save report",
+        Language::SimplifiedChinese => "保存报告",
+    }
+}
+
+fn open_report_button_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Open report",
+        Language::SimplifiedChinese => "打开报告",
+    }
+}
+
+fn about_button_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "ⓘ About",
+        Language::SimplifiedChinese => "ⓘ 关于",
+    }
+}
+
+fn report_copy_button_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Copy",
+        Language::SimplifiedChinese => "复制",
+    }
+}
+
+fn report_save_button_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Save...",
+        Language::SimplifiedChinese => "保存...",
+    }
+}
+
+fn close_button_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Close",
+        Language::SimplifiedChinese => "关闭",
+    }
+}
+
+fn open_github_button_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Open GitHub",
+        Language::SimplifiedChinese => "打开 GitHub",
+    }
+}
+
+fn report_window_title(language: Language) -> &'static str {
+    match language {
+        Language::English => "Driveck Report",
+        Language::SimplifiedChinese => "Driveck 报告",
+    }
+}
+
+fn about_window_title(language: Language) -> &'static str {
+    match language {
+        Language::English => "About Driveck",
+        Language::SimplifiedChinese => "关于 Driveck",
+    }
+}
+
+fn map_panel_title(language: Language) -> &'static str {
+    match language {
+        Language::English => "Validation Map",
+        Language::SimplifiedChinese => "验证分布",
+    }
+}
+
+fn report_panel_title(language: Language) -> &'static str {
+    match language {
+        Language::English => "Report",
+        Language::SimplifiedChinese => "报告",
+    }
+}
+
+fn idle_banner_title(language: Language) -> &'static str {
+    match language {
+        Language::English => "Not validated yet",
+        Language::SimplifiedChinese => "尚未验证",
+    }
+}
+
+fn live_banner_title(language: Language) -> &'static str {
+    match language {
+        Language::English => "Validation in progress",
+        Language::SimplifiedChinese => "正在验证",
+    }
+}
+
+fn report_preview_title(language: Language) -> &'static str {
+    match language {
+        Language::English => "Report preview",
+        Language::SimplifiedChinese => "报告预览",
+    }
+}
+
+fn shared_formatter_output_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Shared Rust formatter output.",
+        Language::SimplifiedChinese => "共享 Rust 报告格式化输出。",
+    }
+}
+
+fn about_hero_title(language: Language) -> &'static str {
+    match language {
+        Language::English => "DriveCk",
+        Language::SimplifiedChinese => "DriveCk",
+    }
+}
+
+fn about_description_text(language: Language) -> &'static str {
+    match language {
+        Language::English => {
+            "Windows utility for validating removable storage capacity and integrity."
+        }
+        Language::SimplifiedChinese => "用于验证可移动存储容量与完整性的 Windows 工具。",
+    }
+}
+
+fn about_note_text(language: Language) -> &'static str {
+    match language {
+        Language::English => {
+            "Shared Rust engine with a native Win32 dashboard, live sample map, and report viewer."
+        }
+        Language::SimplifiedChinese => {
+            "共享 Rust 核心，配合原生 Win32 仪表板、实时采样图和报告查看器。"
+        }
+    }
+}
+
+fn select_target_prompt(language: Language) -> &'static str {
+    match language {
+        Language::English => "Select a removable or USB whole-disk target.",
+        Language::SimplifiedChinese => "请选择可移动或 USB 整盘设备。",
+    }
+}
+
+fn no_device_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "No device",
+        Language::SimplifiedChinese => "无设备",
+    }
+}
+
+fn select_device_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Select device",
+        Language::SimplifiedChinese => "选择设备",
+    }
+}
+
+fn ready_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Ready",
+        Language::SimplifiedChinese => "就绪",
+    }
+}
+
+fn will_dismount_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Will dismount",
+        Language::SimplifiedChinese => "将卸载",
+    }
+}
+
+fn waiting_to_start_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Waiting to start",
+        Language::SimplifiedChinese => "等待开始",
+    }
+}
+
+fn validating_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Validating",
+        Language::SimplifiedChinese => "验证中",
+    }
+}
+
+fn stopping_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Stopping",
+        Language::SimplifiedChinese => "正在停止",
+    }
+}
+
+fn unmounting_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Unmounting",
+        Language::SimplifiedChinese => "正在卸载",
+    }
+}
+
+fn start_failed_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Start failed",
+        Language::SimplifiedChinese => "启动失败",
+    }
+}
+
+fn refresh_failed_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Refresh failed",
+        Language::SimplifiedChinese => "刷新失败",
+    }
+}
+
+fn saved_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Saved",
+        Language::SimplifiedChinese => "已保存",
+    }
+}
+
+fn save_failed_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Save failed",
+        Language::SimplifiedChinese => "保存失败",
+    }
+}
+
+fn failed_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Failed",
+        Language::SimplifiedChinese => "失败",
+    }
+}
+
+fn finished_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Finished",
+        Language::SimplifiedChinese => "完成",
+    }
+}
+
+fn cancelled_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Cancelled",
+        Language::SimplifiedChinese => "已取消",
+    }
+}
+
+fn issues_found_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Issues found",
+        Language::SimplifiedChinese => "发现问题",
+    }
+}
+
+fn incomplete_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Incomplete",
+        Language::SimplifiedChinese => "未完成",
+    }
+}
+
+fn passed_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Passed",
+        Language::SimplifiedChinese => "通过",
+    }
+}
+
+fn mounted_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Mounted",
+        Language::SimplifiedChinese => "已挂载",
+    }
+}
+
+fn idle_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Idle",
+        Language::SimplifiedChinese => "空闲",
+    }
+}
+
+fn finished_with_issues_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Finished with issues",
+        Language::SimplifiedChinese => "完成但有问题",
+    }
+}
+
+fn validation_failed_title(language: Language) -> &'static str {
+    match language {
+        Language::English => "Validation failed.",
+        Language::SimplifiedChinese => "验证失败。",
+    }
+}
+
+fn cannot_start_validation_title(language: Language) -> &'static str {
+    match language {
+        Language::English => "Cannot start validation.",
+        Language::SimplifiedChinese => "无法开始验证。",
+    }
+}
+
+fn confirm_validation_title(language: Language) -> &'static str {
+    match language {
+        Language::English => "Validate selected device?",
+        Language::SimplifiedChinese => "要验证所选设备吗？",
+    }
+}
+
+fn failed_to_refresh_devices_title(language: Language) -> &'static str {
+    match language {
+        Language::English => "Failed to refresh devices.",
+        Language::SimplifiedChinese => "刷新设备失败。",
+    }
+}
+
+fn failed_to_save_report_title(language: Language) -> &'static str {
+    match language {
+        Language::English => "Failed to save report.",
+        Language::SimplifiedChinese => "保存报告失败。",
+    }
+}
+
+fn choose_device_first_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Choose a removable or USB whole-disk device first.",
+        Language::SimplifiedChinese => "请先选择可移动或 USB 整盘设备。",
+    }
+}
+
+fn current_phase_text(state: &AppState) -> String {
+    match state.current_phase_raw.as_str() {
+        "waiting_to_start" => waiting_to_start_text(state.language).to_string(),
+        "finished_with_issues" => finished_with_issues_text(state.language).to_string(),
+        "finished" => finished_text(state.language).to_string(),
+        "failed" => failed_text(state.language).to_string(),
+        "cancelled" => cancelled_text(state.language).to_string(),
+        "unmounting" => unmounting_text(state.language).to_string(),
+        "stopping" => stopping_text(state.language).to_string(),
+        "validating" | "Validating" => validating_text(state.language).to_string(),
+        phase if state.language == Language::English => title_case_phrase(phase),
+        phase => phase.to_string(),
+    }
+}
+
+fn status_label_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Status",
+        Language::SimplifiedChinese => "状态",
+    }
+}
+
+fn model_label_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Model",
+        Language::SimplifiedChinese => "型号",
+    }
+}
+
+fn capacity_label_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Capacity",
+        Language::SimplifiedChinese => "容量",
+    }
+}
+
+fn interface_label_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Interface",
+        Language::SimplifiedChinese => "接口",
+    }
+}
+
+fn current_stage_label_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Current stage",
+        Language::SimplifiedChinese => "当前阶段",
+    }
+}
+
+fn processed_label_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Processed",
+        Language::SimplifiedChinese => "已处理",
+    }
+}
+
+fn progress_label_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Progress",
+        Language::SimplifiedChinese => "进度",
+    }
+}
+
+fn started_label_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Started",
+        Language::SimplifiedChinese => "开始时间",
+    }
+}
+
+fn elapsed_label_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Elapsed",
+        Language::SimplifiedChinese => "已用时",
+    }
+}
+
+fn report_label_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Report",
+        Language::SimplifiedChinese => "报告",
+    }
+}
+
+fn target_label_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Target",
+        Language::SimplifiedChinese => "目标",
+    }
+}
+
+fn device_label_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Device",
+        Language::SimplifiedChinese => "设备",
+    }
+}
+
+fn completed_label_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Completed",
+        Language::SimplifiedChinese => "完成时间",
+    }
+}
+
+fn valid_label_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Valid",
+        Language::SimplifiedChinese => "正常",
+    }
+}
+
+fn invalid_label_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Invalid",
+        Language::SimplifiedChinese => "异常",
+    }
+}
+
+fn io_errors_label_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "I/O errors",
+        Language::SimplifiedChinese => "I/O 错误",
+    }
+}
+
+fn unvalidated_label_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Unvalidated",
+        Language::SimplifiedChinese => "未验证",
+    }
+}
+
+fn failures_label_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Failures",
+        Language::SimplifiedChinese => "问题数",
+    }
+}
+
+fn reported_size_label_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Reported size",
+        Language::SimplifiedChinese => "标称容量",
+    }
+}
+
+fn validated_size_label_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Validated size",
+        Language::SimplifiedChinese => "实测容量",
+    }
+}
+
+fn highest_valid_region_label_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Highest valid region",
+        Language::SimplifiedChinese => "最大有效区域",
+    }
+}
+
+fn region_size_label_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Region size",
+        Language::SimplifiedChinese => "区域大小",
+    }
+}
+
+fn failure_detail_label_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Failure detail",
+        Language::SimplifiedChinese => "问题明细",
+    }
+}
+
+fn version_label_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Version",
+        Language::SimplifiedChinese => "版本",
+    }
+}
+
+fn frontend_label_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Frontend",
+        Language::SimplifiedChinese => "前端",
+    }
+}
+
+fn license_label_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "License",
+        Language::SimplifiedChinese => "许可证",
+    }
+}
+
+fn repository_label_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Repository",
+        Language::SimplifiedChinese => "仓库",
+    }
+}
+
+fn report_ready_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Ready",
+        Language::SimplifiedChinese => "已就绪",
+    }
+}
+
+fn report_pending_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Pending",
+        Language::SimplifiedChinese => "待生成",
+    }
+}
+
+fn report_unavailable_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Unavailable",
+        Language::SimplifiedChinese => "不可用",
+    }
+}
+
+fn report_after_completion_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Available after completion",
+        Language::SimplifiedChinese => "完成后可用",
+    }
+}
+
+fn run_validation_hint_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Run validation to populate the summary and report.",
+        Language::SimplifiedChinese => "运行验证后会生成摘要与报告。",
+    }
+}
+
+fn stop_available_note_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "Stop remains available while validation is running.",
+        Language::SimplifiedChinese => "验证运行期间可随时点击停止。",
+    }
+}
+
+fn shared_report_ready_note_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "The detailed shared Rust report is ready to open.",
+        Language::SimplifiedChinese => "共享 Rust 详细报告已可打开查看。",
+    }
+}
+
+fn temporary_write_note_text(language: Language) -> &'static str {
+    match language {
+        Language::English => {
+            "Validation temporarily writes sampled regions and restores them afterwards."
+        }
+        Language::SimplifiedChinese => "验证会临时写入采样区域，并在结束后恢复原始内容。",
+    }
+}
+
+fn no_device_available_text(language: Language) -> &'static str {
+    match language {
+        Language::English => {
+            "No removable or USB whole-disk device is currently available.\r\n\r\nInsert a target or unmount the disk, then click Refresh."
+        }
+        Language::SimplifiedChinese => {
+            "当前没有可用的可移动或 USB 整盘设备。\r\n\r\n插入目标设备或卸载磁盘后，点击“刷新”。"
+        }
+    }
+}
+
+fn processed_regions_text(language: Language, current: usize, total: usize) -> String {
+    match language {
+        Language::English => format!("{current} of {total} regions"),
+        Language::SimplifiedChinese => format!("{current} / {total} 个区域"),
     }
 }
 
@@ -2600,43 +3502,59 @@ fn device_display_name(target: &TargetInfo) -> String {
     }
 }
 
-fn device_transport_text(target: &TargetInfo) -> String {
+fn device_transport_text(language: Language, target: &TargetInfo) -> String {
     if target.is_usb && target.is_removable {
-        "USB / Removable".to_string()
+        match language {
+            Language::English => "USB / Removable".to_string(),
+            Language::SimplifiedChinese => "USB / 可移动".to_string(),
+        }
     } else if target.is_usb {
         "USB".to_string()
     } else if target.is_removable {
-        "Removable".to_string()
+        match language {
+            Language::English => "Removable".to_string(),
+            Language::SimplifiedChinese => "可移动".to_string(),
+        }
     } else if !target.transport.is_empty() {
         target.transport.to_ascii_uppercase()
     } else {
-        "Block device".to_string()
+        match language {
+            Language::English => "Block device".to_string(),
+            Language::SimplifiedChinese => "块设备".to_string(),
+        }
     }
 }
 
-fn device_row_text(target: &TargetInfo) -> String {
+fn device_row_text(language: Language, target: &TargetInfo) -> String {
     format!(
         "{} | {} | {}{}",
         device_display_name(target),
         format_bytes(target.size_bytes),
-        device_transport_text(target),
-        if target.is_mounted { " | mounted" } else { "" }
+        device_transport_text(language, target),
+        if target.is_mounted {
+            match language {
+                Language::English => " | mounted",
+                Language::SimplifiedChinese => " | 已挂载",
+            }
+        } else {
+            ""
+        }
     )
 }
 
 fn device_status_label(state: &AppState, target: &TargetInfo) -> String {
     if state.is_busy() {
-        "Validating".to_string()
+        validating_text(state.language).to_string()
     } else if state
         .last_response
         .as_ref()
         .is_some_and(|response| response.target.path == target.path)
     {
-        "Finished".to_string()
+        finished_text(state.language).to_string()
     } else if target.is_mounted {
-        "Mounted".to_string()
+        mounted_text(state.language).to_string()
     } else {
-        "Ready".to_string()
+        ready_text(state.language).to_string()
     }
 }
 
@@ -2668,11 +3586,11 @@ fn device_panel_note_text(state: &AppState, target: &TargetInfo) -> String {
 }
 
 unsafe fn footer_stage_text(state: &AppState) -> String {
-    state.current_phase.clone()
+    current_phase_text(state)
 }
 
 unsafe fn footer_stage_tone(state: &AppState) -> Tone {
-    if state.current_phase == "Waiting to start" {
+    if !state.is_busy() && state.last_response.is_none() && state.last_error.is_none() {
         state.status_tone
     } else {
         validation_status_tone(state)
@@ -2681,15 +3599,15 @@ unsafe fn footer_stage_tone(state: &AppState) -> Tone {
 
 fn validation_status_label(state: &AppState) -> String {
     if state.stop_requested {
-        "Stopping".to_string()
+        stopping_text(state.language).to_string()
     } else if state.is_busy() {
-        "Validating".to_string()
+        validating_text(state.language).to_string()
     } else if let Some(response) = state.last_response.as_ref() {
-        report_banner_title(&response.report).to_string()
+        report_banner_title(state.language, &response.report).to_string()
     } else if unsafe { state.selected_target().is_some() } {
-        "Ready".to_string()
+        ready_text(state.language).to_string()
     } else {
-        "Idle".to_string()
+        idle_text(state.language).to_string()
     }
 }
 
@@ -2714,35 +3632,59 @@ fn report_issue_count(report: &ValidationReport) -> usize {
         + report.restore_error_count
 }
 
-fn report_banner_title(report: &ValidationReport) -> &'static str {
+fn report_banner_title(language: Language, report: &ValidationReport) -> &'static str {
     if report.restore_error_count != 0 {
-        "Restore failure"
+        match language {
+            Language::English => "Restore failure",
+            Language::SimplifiedChinese => "恢复失败",
+        }
     } else if report.cancelled {
-        "Cancelled"
+        cancelled_text(language)
     } else if report.mismatch_count != 0 {
-        "Failed"
+        failed_text(language)
     } else if report.read_error_count != 0 || report.write_error_count != 0 {
-        "I/O errors"
+        match language {
+            Language::English => "I/O errors",
+            Language::SimplifiedChinese => "I/O 错误",
+        }
     } else if !report.completed_all_samples {
-        "Incomplete"
+        incomplete_text(language)
     } else {
-        "Passed"
+        passed_text(language)
     }
 }
 
-fn report_banner_subtitle(report: &ValidationReport) -> &'static str {
+fn report_banner_subtitle(language: Language, report: &ValidationReport) -> &'static str {
     if report.restore_error_count != 0 {
-        "Some sampled regions could not be restored."
+        match language {
+            Language::English => "Some sampled regions could not be restored.",
+            Language::SimplifiedChinese => "部分采样区域未能恢复。",
+        }
     } else if report.cancelled {
-        "Stopped before every sample completed."
+        match language {
+            Language::English => "Stopped before every sample completed.",
+            Language::SimplifiedChinese => "在全部采样完成前已停止。",
+        }
     } else if report.mismatch_count != 0 {
-        "Mismatch indicators were detected."
+        match language {
+            Language::English => "Mismatch indicators were detected.",
+            Language::SimplifiedChinese => "检测到校验不匹配。",
+        }
     } else if report.read_error_count != 0 || report.write_error_count != 0 {
-        "Read or write errors were detected."
+        match language {
+            Language::English => "Read or write errors were detected.",
+            Language::SimplifiedChinese => "检测到读写错误。",
+        }
     } else if !report.completed_all_samples {
-        "Validation did not complete every sample."
+        match language {
+            Language::English => "Validation did not complete every sample.",
+            Language::SimplifiedChinese => "验证未完成全部采样。",
+        }
     } else {
-        "No issues detected."
+        match language {
+            Language::English => "No issues detected.",
+            Language::SimplifiedChinese => "未发现问题。",
+        }
     }
 }
 
@@ -2760,55 +3702,82 @@ fn report_banner_tone(report: &ValidationReport) -> Tone {
     }
 }
 
-fn format_failure_summary(report: &ValidationReport) -> String {
+fn format_failure_summary(language: Language, report: &ValidationReport) -> String {
     let mut parts = Vec::new();
     if report.read_error_count != 0 {
-        parts.push(format!("read {}", report.read_error_count));
+        parts.push(match language {
+            Language::English => format!("read {}", report.read_error_count),
+            Language::SimplifiedChinese => format!("读取 {}", report.read_error_count),
+        });
     }
     if report.write_error_count != 0 {
-        parts.push(format!("write {}", report.write_error_count));
+        parts.push(match language {
+            Language::English => format!("write {}", report.write_error_count),
+            Language::SimplifiedChinese => format!("写入 {}", report.write_error_count),
+        });
     }
     if report.mismatch_count != 0 {
-        parts.push(format!("mismatch {}", report.mismatch_count));
+        parts.push(match language {
+            Language::English => format!("mismatch {}", report.mismatch_count),
+            Language::SimplifiedChinese => format!("不匹配 {}", report.mismatch_count),
+        });
     }
     if report.restore_error_count != 0 {
-        parts.push(format!("restore {}", report.restore_error_count));
+        parts.push(match language {
+            Language::English => format!("restore {}", report.restore_error_count),
+            Language::SimplifiedChinese => format!("恢复 {}", report.restore_error_count),
+        });
     }
     if report.cancelled {
-        parts.push("cancelled".to_string());
+        parts.push(cancelled_text(language).to_string());
     } else if !report.completed_all_samples {
-        parts.push("incomplete".to_string());
+        parts.push(incomplete_text(language).to_string());
     }
     if parts.is_empty() {
-        "None".to_string()
+        match language {
+            Language::English => "None".to_string(),
+            Language::SimplifiedChinese => "无".to_string(),
+        }
     } else {
         parts.join(" · ")
     }
 }
 
-fn report_error_preview(target: &TargetInfo, error: &str) -> String {
-    format!("DriveCk\r\nTarget: {}\r\n\r\n{}", target.path, error)
+fn report_error_preview(language: Language, target: &TargetInfo, error: &str) -> String {
+    match language {
+        Language::English => format!("DriveCk\r\nTarget: {}\r\n\r\n{}", target.path, error),
+        Language::SimplifiedChinese => {
+            format!("DriveCk\r\n目标: {}\r\n\r\n{}", target.path, error)
+        }
+    }
 }
 
-fn report_placeholder_text() -> &'static str {
-    "The detailed report becomes available when validation finishes."
+fn report_placeholder_text(language: Language) -> &'static str {
+    match language {
+        Language::English => "The detailed report becomes available when validation finishes.",
+        Language::SimplifiedChinese => "验证完成后可查看详细报告。",
+    }
 }
 
-fn final_status_text(error: Option<&str>, report: &ValidationReport) -> (String, Tone) {
+fn final_status_text(
+    error: Option<&str>,
+    report: &ValidationReport,
+    language: Language,
+) -> (String, Tone) {
     if error.is_some() {
         if report.cancelled {
-            ("Cancelled".to_string(), Tone::Warning)
+            (cancelled_text(language).to_string(), Tone::Warning)
         } else {
-            ("Failed".to_string(), Tone::Danger)
+            (failed_text(language).to_string(), Tone::Danger)
         }
     } else if report.cancelled {
-        ("Cancelled".to_string(), Tone::Warning)
+        (cancelled_text(language).to_string(), Tone::Warning)
     } else if report_issue_count(report) != 0 {
-        ("Issues found".to_string(), Tone::Danger)
+        (issues_found_text(language).to_string(), Tone::Danger)
     } else if !report.completed_all_samples {
-        ("Incomplete".to_string(), Tone::Warning)
+        (incomplete_text(language).to_string(), Tone::Warning)
     } else {
-        ("Finished".to_string(), Tone::Success)
+        (finished_text(language).to_string(), Tone::Success)
     }
 }
 

@@ -13,6 +13,7 @@ struct ReportWindowState {
     report_text: String,
     response: Option<ValidationResponse>,
     target_path: Option<String>,
+    language: Language,
 }
 
 pub(super) unsafe extern "system" fn report_window_proc(
@@ -45,7 +46,7 @@ pub(super) unsafe extern "system" fn report_window_proc(
                 );
                 state.copy_button = create_control(
                     "BUTTON",
-                    LABEL_REPORT_COPY,
+                    report_copy_button_text(state.language),
                     hwnd,
                     0,
                     0,
@@ -56,7 +57,7 @@ pub(super) unsafe extern "system" fn report_window_proc(
                 );
                 state.save_button = create_control(
                     "BUTTON",
-                    LABEL_REPORT_SAVE,
+                    report_save_button_text(state.language),
                     hwnd,
                     0,
                     0,
@@ -67,7 +68,7 @@ pub(super) unsafe extern "system" fn report_window_proc(
                 );
                 state.close_button = create_control(
                     "BUTTON",
-                    LABEL_CLOSE,
+                    close_button_text(state.language),
                     hwnd,
                     0,
                     0,
@@ -127,7 +128,7 @@ pub(super) unsafe extern "system" fn report_window_proc(
                                 Err(error) => {
                                     show_message(
                                         hwnd,
-                                        "Failed to save report.",
+                                        failed_to_save_report_title(state.language),
                                         &error,
                                         MB_ICONERROR,
                                     );
@@ -192,13 +193,14 @@ pub(super) unsafe fn open_report_window(state: &mut AppState) {
         report_text: state
             .report_text
             .clone()
-            .unwrap_or_else(|| report_placeholder_text().to_string()),
+            .unwrap_or_else(|| report_placeholder_text(state.language).to_string()),
         response: state.last_response.clone(),
         target_path: state.last_report_target_path.clone(),
+        language: state.language,
     });
 
     let class_name = wide(REPORT_CLASS_NAME);
-    let title = wide("Driveck Report");
+    let title = wide(report_window_title(state.language));
     let hwnd = CreateWindowExW(
         Default::default(),
         PCWSTR(class_name.as_ptr()),
@@ -214,7 +216,7 @@ pub(super) unsafe fn open_report_window(state: &mut AppState) {
         Some(Box::into_raw(window_state) as *const c_void),
     )
     .expect("create report window");
-    set_text(hwnd, "Driveck Report");
+    set_text(hwnd, report_window_title(state.language));
     center_window(hwnd, Some(state.hwnd), 860, 660);
     state.report_window = Some(hwnd);
     let _ = ShowWindow(hwnd, SW_SHOW);
@@ -229,12 +231,14 @@ pub(super) unsafe fn sync_report_window_from_main_state(state: &AppState) {
     };
 
     report_state.report_ready = state.report_text.is_some();
+    report_state.language = state.language;
     report_state.report_text = state
         .report_text
         .clone()
-        .unwrap_or_else(|| report_placeholder_text().to_string());
+        .unwrap_or_else(|| report_placeholder_text(state.language).to_string());
     report_state.response = state.last_response.clone();
     report_state.target_path = state.last_report_target_path.clone();
+    set_text(report_hwnd, report_window_title(state.language));
     sync_report_window_controls(report_state);
     let _ = InvalidateRect(Some(report_hwnd), None, true);
 }
@@ -242,6 +246,9 @@ pub(super) unsafe fn sync_report_window_from_main_state(state: &AppState) {
 unsafe fn sync_report_window_controls(state: &ReportWindowState) {
     let normalized = normalize_windows_newlines(&state.report_text);
     set_text(state.edit, &normalized);
+    set_text(state.copy_button, report_copy_button_text(state.language));
+    set_text(state.save_button, report_save_button_text(state.language));
+    set_text(state.close_button, close_button_text(state.language));
     enable(state.save_button, state.report_ready);
 }
 
@@ -289,13 +296,13 @@ unsafe fn paint_report_window(hwnd: HWND, state: &ReportWindowState) {
     let title = state
         .response
         .as_ref()
-        .map(|response| report_banner_title(&response.report))
-        .unwrap_or(LABEL_REPORT_PREVIEW);
+        .map(|response| report_banner_title(state.language, &response.report))
+        .unwrap_or(report_preview_title(state.language));
     let subtitle = state
         .response
         .as_ref()
-        .map(|response| report_banner_subtitle(&response.report).to_string())
-        .unwrap_or_else(|| "Shared Rust formatter output.".to_string());
+        .map(|response| report_banner_subtitle(state.language, &response.report).to_string())
+        .unwrap_or_else(|| shared_formatter_output_text(state.language).to_string());
     let tone = state
         .response
         .as_ref()
@@ -360,7 +367,7 @@ unsafe fn paint_report_window(hwnd: HWND, state: &ReportWindowState) {
     draw_metric_row(
         back_dc,
         make_rect(header_content.left, detail_top, left_width, 22),
-        "Device",
+        device_label_text(state.language),
         &target_value,
         state.ui_font,
     );
@@ -377,7 +384,7 @@ unsafe fn paint_report_window(hwnd: HWND, state: &ReportWindowState) {
             right_width,
             22,
         ),
-        "Completed",
+        completed_label_text(state.language),
         &completed_value,
         state.ui_font,
     );
