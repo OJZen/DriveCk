@@ -17,3 +17,6 @@ gtk.workspace = true
 libc.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[build-dependencies]
+glib-build-tools = "0.21.0"

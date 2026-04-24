@@ -121,6 +121,12 @@ When the GTK app starts a validation run on Linux, it now requests administrator
 access through a GUI `pkexec` / polkit prompt before opening the raw block
 device, unless the app is already running as root.
 
+Linux desktop icon assets now live under `icon/`, with a matching
+`icon/com.github.driveck.desktop` entry and `icon/hicolor/` theme layout for the
+`com.github.driveck` application ID. The GTK binary also embeds the same icon
+set through GResource, so it can resolve the app icon even before the desktop
+entry and theme assets are installed system-wide.
+
 Win32 on Windows (run these from Developer PowerShell for VS 2022 or another
 shell initialized with the MSVC build environment):
 

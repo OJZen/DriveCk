@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=DriveCk
+Comment=Validate removable and USB storage devices
+Exec=driveck
+Icon=com.github.driveck
+Terminal=false
+Categories=GTK;Utility;System;
+Keywords=drive;disk;usb;storage;validation;
+StartupNotify=true

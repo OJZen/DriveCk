@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gresources>
+  <gresource prefix="/com/github/driveck/icons">
+    <file>hicolor/index.theme</file>
+    <file>hicolor/16x16/apps/com.github.driveck.png</file>
+    <file>hicolor/24x24/apps/com.github.driveck.png</file>
+    <file>hicolor/32x32/apps/com.github.driveck.png</file>
+    <file>hicolor/48x48/apps/com.github.driveck.png</file>
+    <file>hicolor/64x64/apps/com.github.driveck.png</file>
+    <file>hicolor/128x128/apps/com.github.driveck.png</file>
+    <file>hicolor/256x256/apps/com.github.driveck.png</file>
+    <file>hicolor/512x512/apps/com.github.driveck.png</file>
+    <file>hicolor/scalable/apps/com.github.driveck.svg</file>
+  </gresource>
+</gresources>

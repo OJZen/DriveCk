@@ -13,27 +13,28 @@ mod app {
         process::{Child, ChildStderr, ChildStdin, ChildStdout, Command, ExitStatus, Stdio},
         rc::Rc,
         sync::{
+            Arc, Mutex,
             atomic::{AtomicBool, Ordering},
-            mpsc, Arc, Mutex,
+            mpsc,
         },
         thread::{self, JoinHandle},
         time::Duration,
     };
 
     use driveck_core::{
-        collect_targets, discover_target, format_bytes, format_report_text, report_verdict,
-        save_report, validate_target_with_callbacks, ProgressUpdate, SampleStatus, TargetInfo,
-        ValidationFailure, ValidationOptions, ValidationReport, DRIVECK_MAP_COLUMNS,
-        DRIVECK_MAP_ROWS,
+        DRIVECK_MAP_COLUMNS, DRIVECK_MAP_ROWS, ProgressUpdate, SampleStatus, TargetInfo,
+        ValidationFailure, ValidationOptions, ValidationReport, collect_targets, discover_target,
+        format_bytes, format_report_text, report_verdict, save_report,
+        validate_target_with_callbacks,
     };
     use gtk::{
-        gdk,
+        Align, Application, ApplicationWindow, AspectFrame, Box as GtkBox, Button, CssProvider,
+        Dialog, DrawingArea, DropDown, FileChooserAction, FileChooserNative, Grid, Label,
+        LinkButton, MessageDialog, Orientation, ResponseType, STYLE_PROVIDER_PRIORITY_APPLICATION,
+        ScrolledWindow, StringList, TextView, gdk,
         glib::{self, ControlFlow, Propagation},
         prelude::*,
-        style_context_add_provider_for_display, Align, Application, ApplicationWindow, AspectFrame,
-        Box as GtkBox, Button, CssProvider, Dialog, DrawingArea, DropDown, FileChooserAction,
-        FileChooserNative, Grid, Label, LinkButton, MessageDialog, Orientation, ResponseType,
-        ScrolledWindow, StringList, TextView, STYLE_PROVIDER_PRIORITY_APPLICATION,
+        style_context_add_provider_for_display,
     };
     use serde::{Deserialize, Serialize};
 
@@ -42,8 +43,12 @@ mod app {
     const GRID_HEIGHT: i32 = 236;
     const GRID_GAP: f64 = 1.0;
     const GRID_PADDING: f64 = 6.0;
+    const APP_ID: &str = "com.github.driveck";
     const APP_VERSION: &str = "v1.0";
     const PROJECT_URL: &str = "https://github.com/OJZen/DriveCk";
+    const ICON_SEARCH_ROOT: &str = "icon";
+    const RESOURCE_BASE_PATH: &str = "/com/github/driveck";
+    const ICON_RESOURCE_PATH: &str = "/com/github/driveck/icons";
     const APP_CSS: &str = r#"
     .window-root {
         background: #f4f7fb;
@@ -1318,6 +1323,25 @@ mod app {
         }
     }
 
+    fn register_resources() {
+        gtk::gio::resources_register_include!("driveck.gresource")
+            .expect("register embedded GTK resources");
+    }
+
+    fn configure_app_icon(window: &ApplicationWindow) {
+        if let Some(display) = gdk::Display::default() {
+            let icon_theme = gtk::IconTheme::for_display(&display);
+            icon_theme.add_resource_path(ICON_RESOURCE_PATH);
+            if let Ok(icon_root) = env::current_dir().map(|dir| dir.join(ICON_SEARCH_ROOT)) {
+                if icon_root.is_dir() {
+                    icon_theme.add_search_path(icon_root);
+                }
+            }
+        }
+        gtk::Window::set_default_icon_name(APP_ID);
+        window.set_icon_name(Some(APP_ID));
+    }
+
     fn build_metric_chip(text: &str, class_name: &str) -> Label {
         let label = Label::new(Some(text));
         label.add_css_class("metric-chip");
@@ -1401,6 +1425,7 @@ mod app {
             .default_height(580)
             .build();
         window.set_resizable(true);
+        configure_app_icon(&window);
 
         let root = GtkBox::new(Orientation::Vertical, 8);
         root.add_css_class("window-root");
@@ -1663,8 +1688,10 @@ mod app {
     }
 
     pub fn run() {
+        register_resources();
         let application = Application::builder()
-            .application_id("com.github.driveck")
+            .application_id(APP_ID)
+            .resource_base_path(RESOURCE_BASE_PATH)
             .build();
         application.connect_activate(|application| {
             let _state = build_ui(application);
@@ -1674,7 +1701,7 @@ mod app {
 
     #[cfg(test)]
     mod tests {
-        use super::{parse_launch_mode, LaunchMode};
+        use super::{LaunchMode, parse_launch_mode};
 
         #[test]
         fn launch_mode_defaults_to_app() {
