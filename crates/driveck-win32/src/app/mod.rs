@@ -2280,14 +2280,6 @@ unsafe fn paint_footer(hdc: HDC, state: &AppState, layout: &Layout) {
     );
     draw_text_block(
         hdc,
-        layout.progress_label,
-        progress_label_text(state.language),
-        TEXT_MUTED,
-        DT_LEFT | DT_SINGLELINE | DT_VCENTER,
-        state.ui_font,
-    );
-    draw_text_block(
-        hdc,
         layout.percent,
         &progress_percent_text(state.progress_current, state.progress_total),
         TEXT_PRIMARY,

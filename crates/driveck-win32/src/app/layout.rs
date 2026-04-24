@@ -37,7 +37,6 @@ pub(crate) struct Layout {
     pub(crate) report_button: RECT,
     pub(crate) footer_panel: RECT,
     pub(crate) status_label: RECT,
-    pub(crate) progress_label: RECT,
     pub(crate) progress: RECT,
     pub(crate) percent: RECT,
     pub(crate) elapsed: RECT,
@@ -77,7 +76,6 @@ pub(crate) fn current_layout(hwnd: HWND) -> Layout {
     let controls_left = header_panel.left + scale_for_window(hwnd, 12);
     let controls_right = header_panel.right - scale_for_window(hwnd, 12);
     let button_gap = scale_for_window(hwnd, 8);
-    let language_width = scale_for_window(hwnd, 112);
     let refresh_width = scale_for_window(hwnd, 86);
     let validate_width = scale_for_window(hwnd, 96);
     let open_report_width = scale_for_window(hwnd, 96);
@@ -85,22 +83,15 @@ pub(crate) fn current_layout(hwnd: HWND) -> Layout {
     let about_width = scale_for_window(hwnd, 72);
     let combo_width = (controls_right
         - controls_left
-        - button_gap * 4
-        - language_width
+        - button_gap * 3
         - refresh_width
         - validate_width
         - about_width)
-        .max(scale_for_window(hwnd, 180));
+        .max(scale_for_window(hwnd, 240));
 
     let combo = make_rect(controls_left, controls_top, combo_width, control_height);
-    let language_combo = make_rect(
-        combo.right + button_gap,
-        controls_top,
-        language_width,
-        control_height,
-    );
     let refresh_button = make_rect(
-        language_combo.right + button_gap,
+        combo.right + button_gap,
         controls_top,
         refresh_width,
         control_height,
@@ -168,41 +159,55 @@ pub(crate) fn current_layout(hwnd: HWND) -> Layout {
     );
     let footer_inner_left = footer_panel.left + scale_for_window(hwnd, 10);
     let footer_inner_right = footer_panel.right - scale_for_window(hwnd, 10);
+    let footer_text_top = footer_panel.top + scale_for_window(hwnd, 13);
+    let footer_text_height = scale_for_window(hwnd, 16);
+    let footer_control_top = footer_panel.top + scale_for_window(hwnd, 6);
+    let footer_gap = scale_for_window(hwnd, 10);
+    let language_width = scale_for_window(hwnd, 112);
+    let language_combo = make_rect(
+        footer_inner_right - language_width,
+        footer_control_top,
+        language_width,
+        control_height,
+    );
+    let status_width = scale_for_window(hwnd, 180);
+    let percent_width = scale_for_window(hwnd, 40);
+    let elapsed_width = scale_for_window(hwnd, 112);
 
     let status_label = make_rect(
         footer_inner_left,
-        footer_panel.top + scale_for_window(hwnd, 13),
-        scale_for_window(hwnd, 220),
-        scale_for_window(hwnd, 16),
+        footer_text_top,
+        status_width,
+        footer_text_height,
     );
-    let elapsed = make_rect(
-        footer_inner_right - scale_for_window(hwnd, 112),
-        footer_panel.top + scale_for_window(hwnd, 13),
-        scale_for_window(hwnd, 112),
-        scale_for_window(hwnd, 16),
-    );
-    let percent = make_rect(
-        elapsed.left - scale_for_window(hwnd, 52),
-        footer_panel.top + scale_for_window(hwnd, 13),
-        scale_for_window(hwnd, 40),
-        scale_for_window(hwnd, 16),
-    );
-    let progress_width = ((rect_width(footer_panel) * 30) / 100)
-        .clamp(scale_for_window(hwnd, 220), scale_for_window(hwnd, 360));
-    let progress_left = footer_panel.left + (rect_width(footer_panel) - progress_width) / 2;
+    let progress_left = status_label.right + footer_gap;
+    let max_progress_width = (language_combo.left
+        - progress_left
+        - footer_gap
+        - percent_width
+        - footer_gap
+        - elapsed_width
+        - footer_gap)
+        .max(scale_for_window(hwnd, 160));
+    let progress_width = scale_for_window(hwnd, 260).min(max_progress_width);
     let progress = make_rect(
         progress_left,
         footer_panel.top + scale_for_window(hwnd, 12),
         progress_width,
         scale_for_window(hwnd, 16),
     );
-    let progress_label = make_rect(
-        progress.left - scale_for_window(hwnd, 58),
-        footer_panel.top + scale_for_window(hwnd, 13),
-        scale_for_window(hwnd, 52),
-        scale_for_window(hwnd, 16),
+    let percent = make_rect(
+        progress.right + footer_gap,
+        footer_text_top,
+        percent_width,
+        footer_text_height,
     );
-
+    let elapsed = make_rect(
+        percent.right + footer_gap,
+        footer_text_top,
+        elapsed_width,
+        footer_text_height,
+    );
     Layout {
         header_panel,
         header_label,
@@ -221,7 +226,6 @@ pub(crate) fn current_layout(hwnd: HWND) -> Layout {
         report_button,
         footer_panel,
         status_label,
-        progress_label,
         progress,
         percent,
         elapsed,
