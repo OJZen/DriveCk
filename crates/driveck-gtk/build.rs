@@ -1,7 +1,7 @@
 #[cfg(target_os = "linux")]
 fn main() {
     glib_build_tools::compile_resources(
-        &["../../icon"],
+        &["../../icon/linux"],
         "resources/driveck.gresource.xml",
         "driveck.gresource",
     );
