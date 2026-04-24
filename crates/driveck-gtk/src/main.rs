@@ -29,7 +29,7 @@ mod app {
     };
     use gtk::{
         Align, Application, ApplicationWindow, AspectFrame, Box as GtkBox, Button, CssProvider,
-        Dialog, DrawingArea, DropDown, FileChooserAction, FileChooserNative, Grid, Label,
+        Dialog, DrawingArea, DropDown, FileChooserAction, FileChooserNative, Grid, Image, Label,
         LinkButton, MessageDialog, Orientation, ResponseType, STYLE_PROVIDER_PRIORITY_APPLICATION,
         ScrolledWindow, StringList, TextView, gdk,
         glib::{self, ControlFlow, Propagation},
@@ -44,7 +44,7 @@ mod app {
     const GRID_GAP: f64 = 1.0;
     const GRID_PADDING: f64 = 6.0;
     const APP_ID: &str = "com.github.driveck";
-    const APP_VERSION: &str = "v1.0";
+    const APP_VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
     const PROJECT_URL: &str = "https://github.com/OJZen/DriveCk";
     const ICON_SEARCH_ROOT: &str = "icon";
     const RESOURCE_BASE_PATH: &str = "/com/github/driveck";
@@ -1328,6 +1328,63 @@ mod app {
             .expect("register embedded GTK resources");
     }
 
+    fn show_about_dialog(window: &ApplicationWindow) {
+        let dialog = Dialog::builder()
+            .transient_for(window)
+            .modal(true)
+            .title("About DriveCk")
+            .default_width(360)
+            .build();
+
+        let content = dialog.content_area();
+        content.set_spacing(12);
+        content.set_margin_top(12);
+        content.set_margin_bottom(12);
+        content.set_margin_start(12);
+        content.set_margin_end(12);
+
+        let card = GtkBox::new(Orientation::Vertical, 8);
+        card.add_css_class("panel");
+
+        let icon = Image::from_icon_name(APP_ID);
+        icon.set_pixel_size(72);
+        icon.set_halign(Align::Center);
+
+        let app_name = Label::new(Some("DriveCk"));
+        app_name.add_css_class("device-title");
+        app_name.set_halign(Align::Center);
+        app_name.set_xalign(0.5);
+        app_name.set_selectable(false);
+
+        let version = Label::new(Some(APP_VERSION));
+        version.add_css_class("summary-value");
+        version.set_halign(Align::Center);
+        version.set_xalign(0.5);
+        version.set_selectable(false);
+
+        let project_key = Label::new(Some("Project"));
+        project_key.add_css_class("summary-key");
+        project_key.set_halign(Align::Center);
+        project_key.set_xalign(0.5);
+        project_key.set_selectable(false);
+
+        let project_url = LinkButton::builder()
+            .uri(PROJECT_URL)
+            .label(PROJECT_URL)
+            .build();
+        project_url.add_css_class("version-link");
+        project_url.set_has_frame(false);
+        project_url.set_halign(Align::Center);
+
+        card.append(&icon);
+        card.append(&app_name);
+        card.append(&version);
+        card.append(&project_key);
+        card.append(&project_url);
+        content.append(&card);
+        dialog.present();
+    }
+
     fn configure_app_icon(window: &ApplicationWindow) {
         if let Some(display) = gdk::Display::default() {
             let icon_theme = gtk::IconTheme::for_display(&display);
@@ -1520,13 +1577,16 @@ mod app {
         version_footer.set_hexpand(true);
         version_footer.set_halign(Align::Center);
         version_footer.set_margin_top(2);
-        let version_link = LinkButton::builder()
-            .uri(PROJECT_URL)
-            .label(format!("DriveCk {APP_VERSION}"))
-            .build();
-        version_link.add_css_class("version-link");
-        version_link.set_has_frame(false);
-        version_footer.append(&version_link);
+        let version_button = Button::with_label(&format!("DriveCk {APP_VERSION}"));
+        version_button.add_css_class("version-link");
+        version_button.set_has_frame(false);
+        {
+            let window = window.clone();
+            version_button.connect_clicked(move |_| {
+                show_about_dialog(&window);
+            });
+        }
+        version_footer.append(&version_button);
         root.append(&version_footer);
 
         window.set_child(Some(&root));
