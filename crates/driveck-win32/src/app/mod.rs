@@ -85,6 +85,7 @@ const MAIN_CLASS_NAME: &str = "DriveCkWin32Main";
 const REPORT_CLASS_NAME: &str = "DriveCkWin32Report";
 const ABOUT_CLASS_NAME: &str = "DriveCkWin32About";
 const APP_REPOSITORY_URL: &str = "https://github.com/OJZen/DriveCk";
+const APP_AUTHOR: &str = "OJZen";
 
 const IDC_DEVICE_COMBO: i32 = 100;
 const IDC_REFRESH: i32 = 101;
@@ -121,7 +122,7 @@ const MIN_WINDOW_HEIGHT: i32 = 660;
 const MIN_REPORT_WINDOW_WIDTH: i32 = 740;
 const MIN_REPORT_WINDOW_HEIGHT: i32 = 560;
 const MIN_ABOUT_WINDOW_WIDTH: i32 = 480;
-const MIN_ABOUT_WINDOW_HEIGHT: i32 = 320;
+const MIN_ABOUT_WINDOW_HEIGHT: i32 = 260;
 
 const APP_BG: COLORREF = rgb(247, 249, 252);
 const SURFACE_BG: COLORREF = rgb(255, 255, 255);
@@ -2963,26 +2964,6 @@ fn about_hero_title(language: Language) -> &'static str {
     }
 }
 
-fn about_description_text(language: Language) -> &'static str {
-    match language {
-        Language::English => {
-            "Windows utility for validating removable storage capacity and integrity."
-        }
-        Language::SimplifiedChinese => "用于验证可移动存储容量与完整性的 Windows 工具。",
-    }
-}
-
-fn about_note_text(language: Language) -> &'static str {
-    match language {
-        Language::English => {
-            "Shared Rust engine with a native Win32 dashboard, live sample map, and report viewer."
-        }
-        Language::SimplifiedChinese => {
-            "共享 Rust 核心，配合原生 Win32 仪表板、实时采样图和报告查看器。"
-        }
-    }
-}
-
 fn select_target_prompt(language: Language) -> &'static str {
     match language {
         Language::English => "Select a removable or USB whole-disk target.",
@@ -3362,24 +3343,17 @@ fn version_label_text(language: Language) -> &'static str {
     }
 }
 
-fn frontend_label_text(language: Language) -> &'static str {
+fn project_url_label_text(language: Language) -> &'static str {
     match language {
-        Language::English => "Frontend",
-        Language::SimplifiedChinese => "前端",
+        Language::English => "Project URL",
+        Language::SimplifiedChinese => "项目地址",
     }
 }
 
-fn license_label_text(language: Language) -> &'static str {
+fn author_label_text(language: Language) -> &'static str {
     match language {
-        Language::English => "License",
-        Language::SimplifiedChinese => "许可证",
-    }
-}
-
-fn repository_label_text(language: Language) -> &'static str {
-    match language {
-        Language::English => "Repository",
-        Language::SimplifiedChinese => "仓库",
+        Language::English => "Author",
+        Language::SimplifiedChinese => "作者",
     }
 }
 

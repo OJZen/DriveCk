@@ -143,7 +143,7 @@ pub(super) unsafe fn open_about_window(state: &mut AppState) {
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         560,
-        380,
+        320,
         Some(state.hwnd),
         None,
         Some(HINSTANCE(GetModuleHandleW(None).unwrap().0)),
@@ -151,7 +151,7 @@ pub(super) unsafe fn open_about_window(state: &mut AppState) {
     )
     .expect("create about window");
     set_text(hwnd, about_window_title(state.language));
-    center_window(hwnd, Some(state.hwnd), 560, 380);
+    center_window(hwnd, Some(state.hwnd), 560, 320);
     state.about_window = Some(hwnd);
     let _ = ShowWindow(hwnd, SW_SHOW);
 }
@@ -230,38 +230,16 @@ unsafe fn paint_about_window(hwnd: HWND, state: &AboutWindowState) {
         state.ui_font,
     );
 
-    let desc_rect = make_rect(
-        content.left,
-        title_rect.bottom + 12,
-        rect_width(content),
-        40,
-    );
-    draw_text_block(
-        back_dc,
-        desc_rect,
-        about_description_text(state.language),
-        TEXT_MUTED,
-        DT_LEFT | DT_WORDBREAK | DT_NOPREFIX,
-        state.ui_font,
-    );
-
-    let mut row_top = desc_rect.bottom + 14;
+    let mut row_top = title_rect.bottom + 18;
     for (label, value) in [
+        (
+            project_url_label_text(state.language),
+            APP_REPOSITORY_URL.to_string(),
+        ),
+        (author_label_text(state.language), APP_AUTHOR.to_string()),
         (
             version_label_text(state.language),
             env!("CARGO_PKG_VERSION").to_string(),
-        ),
-        (
-            frontend_label_text(state.language),
-            "Rust + Win32".to_string(),
-        ),
-        (
-            license_label_text(state.language),
-            env!("CARGO_PKG_LICENSE").to_string(),
-        ),
-        (
-            repository_label_text(state.language),
-            APP_REPOSITORY_URL.to_string(),
         ),
     ] {
         draw_metric_row(
@@ -273,16 +251,6 @@ unsafe fn paint_about_window(hwnd: HWND, state: &AboutWindowState) {
         );
         row_top += 28;
     }
-
-    let note_rect = make_rect(content.left, row_top + 8, rect_width(content), 40);
-    draw_text_block(
-        back_dc,
-        note_rect,
-        about_note_text(state.language),
-        TEXT_MUTED,
-        DT_LEFT | DT_WORDBREAK | DT_NOPREFIX,
-        state.ui_font,
-    );
 
     let _ = BitBlt(
         hdc,
