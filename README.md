@@ -32,7 +32,7 @@ Current screenshots cover the Linux GTK frontend and the native Win32 frontend.
 - validates removable and USB whole-disk devices
 - live 18 x 32 validation grid during a run
 - human-readable report with verdict and usable-size summary
-- Linux GTK app, Linux CLI, native macOS app/CLI, and native Win32 app
+- Linux GTK app, Linux CLI, native macOS app/CLI, and native Win32 app with an embedded CLI mode
 
 ## Before you run it
 
@@ -130,6 +130,13 @@ Developer PowerShell for VS 2022:
 ```powershell
 cargo run -p driveck-win32
 cargo build --release -p driveck-win32
+```
+
+The same source build also supports CLI mode:
+
+```powershell
+cargo run -p driveck-win32 -- --list
+cargo run -p driveck-win32 -- --yes \\.\PhysicalDrive2
 ```
 
 If you use the packaged Windows GUI release, extract the archive and run:
