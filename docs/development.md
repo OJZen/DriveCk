@@ -119,6 +119,9 @@ Packaging also standardizes staged product names:
 - Windows GUI packages expose `DriveCk.exe`
 - macOS GUI packages expose `DriveCk.app` plus the `driveck` helper
 
+Release archives intentionally omit `README.md` and only stage the runtime
+artifacts needed by that target.
+
 ## Running locally
 
 ### Rust CLI

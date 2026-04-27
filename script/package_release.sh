@@ -167,7 +167,6 @@ trap cleanup EXIT
 mkdir -p "$OUTPUT_DIR" "$STAGE_DIR"
 [ -e "$BUILT_BINARY_PATH" ] || die "expected build output was not found: $BUILT_BINARY_PATH"
 
-copy_into_stage "$ROOT_DIR/README.md" "$STAGE_DIR/README.md"
 copy_into_stage "$BUILT_BINARY_PATH" "$STAGE_DIR/$STAGED_BINARY_NAME"
 
 case "$TARGET" in
