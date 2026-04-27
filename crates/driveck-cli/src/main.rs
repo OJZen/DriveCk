@@ -1,5 +1,5 @@
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    ExitCode::from(driveck_cli::run_env() as u8)
+    driveck_cli::run_from_env()
 }

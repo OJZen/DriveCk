@@ -123,7 +123,7 @@ Packaging also standardizes staged product names:
 
 - CLI packages expose `driveck` on Unix-like hosts and `driveck.exe` on Windows
 - Linux GUI packages expose `driveck` plus `resources/icon/linux/`
-- Windows GUI packages expose `DriveCk.exe`
+- Windows GUI packages expose `DriveCk.exe`, which can launch the GUI or run the embedded CLI mode
 - macOS GUI packages expose `DriveCk.app` plus the `driveck` helper
 
 Release archives intentionally omit `README.md` and only stage the runtime
@@ -194,6 +194,15 @@ Run these from a Windows shell initialized with the MSVC environment:
 ```powershell
 cargo run -p driveck-win32
 cargo build --release -p driveck-win32
+```
+
+The Win32 executable also supports the embedded CLI mode when launched with
+arguments:
+
+```powershell
+cargo run -p driveck-win32 -- --list
+.\target\release\driveck-win32.exe --yes \\.\PhysicalDrive2
+.\target\release\driveck-win32.exe --gui
 ```
 
 ### macOS CLI

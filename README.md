@@ -7,7 +7,7 @@ integrity on sampled regions, and generates a human-readable report.
 
 - Linux: GTK GUI and CLI
 - macOS: native app and native CLI
-- Windows: native Win32 app
+- Windows: native Win32 app with an embedded CLI mode
 
 ## Screenshots
 
@@ -144,11 +144,20 @@ To package the Windows release from PowerShell, prefer:
 .\script\package_release.ps1 win32
 ```
 
+The same `DriveCk.exe` also supports CLI mode when launched from a terminal:
+
+```powershell
+.\DriveCk.exe --list
+.\DriveCk.exe --yes \\.\PhysicalDrive2
+.\DriveCk.exe --gui
+```
+
 The Win32 frontend:
 
 - discovers removable and USB whole-disk targets
 - blocks mounted disks until every volume on the physical disk has been unmounted
 - shows the live validation grid, progress, summary, and report preview during a run
+- can switch into the existing list / validate / save-report CLI flow when launched with CLI arguments
 
 ### macOS
 

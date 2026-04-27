@@ -1,6 +1,7 @@
 use std::{
     env,
     io::{self, IsTerminal as _, Write as _},
+    process::ExitCode,
 };
 
 use driveck_core::{
@@ -18,33 +19,37 @@ struct CliOptions {
     target_path: Option<String>,
 }
 
-pub fn run_env() -> i32 {
+pub fn run_from_env() -> ExitCode {
     let args = env::args().collect::<Vec<_>>();
-    run_with_args_handled(&args)
+    run_with_args_internal(&args, false)
 }
 
-pub fn run_with_args_handled(args: &[String]) -> i32 {
-    match run_with_args(args) {
+pub fn run_with_args(args: &[String]) -> ExitCode {
+    run_with_args_internal(args, true)
+}
+
+fn run_with_args_internal(args: &[String], supports_gui: bool) -> ExitCode {
+    match run(args, supports_gui) {
         Ok(code) => code,
         Err(error) => {
             eprintln!("{error}");
-            2
+            ExitCode::from(2)
         }
     }
 }
 
-pub fn run_with_args(args: &[String]) -> Result<i32, String> {
+fn run(args: &[String], supports_gui: bool) -> Result<ExitCode, String> {
     let options = parse_options(args)?;
-    let program = args.first().map(String::as_str).unwrap_or("driveck");
     if options.show_help {
-        print_usage(program);
-        return Ok(0);
+        let program = args.first().map(String::as_str).unwrap_or("driveck");
+        print_usage(program, supports_gui);
+        return Ok(ExitCode::SUCCESS);
     }
 
     if options.list_only {
         let targets = collect_targets().map_err(|error| error.message)?;
         print_targets(&targets);
-        return Ok(0);
+        return Ok(ExitCode::SUCCESS);
     }
 
     let target_path = options
@@ -82,7 +87,11 @@ pub fn run_with_args(args: &[String]) -> Result<i32, String> {
         save_report(path, &target, &report).map_err(|error| error.message)?;
     }
 
-    Ok(if report_has_failures(&report) { 1 } else { 0 })
+    Ok(if report_has_failures(&report) {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    })
 }
 
 fn parse_options(args: &[String]) -> Result<CliOptions, String> {
@@ -215,7 +224,11 @@ fn print_targets(targets: &[TargetInfo]) {
             "{:<16} {:<12} {:<10} {:<10} {}{}{}",
             target.path,
             format_bytes(target.size_bytes),
-            if target.is_mounted { "mounted" } else { "ready" },
+            if target.is_mounted {
+                "mounted"
+            } else {
+                "ready"
+            },
             transport,
             target.vendor,
             if !target.vendor.is_empty() && !target.model.is_empty() {
@@ -228,9 +241,28 @@ fn print_targets(targets: &[TargetInfo]) {
     }
 }
 
-fn print_usage(program: &str) {
+fn example_device_path() -> &'static str {
+    if cfg!(windows) {
+        r"\\.\PhysicalDrive2"
+    } else {
+        "/dev/sdb"
+    }
+}
+
+fn print_usage(program: &str, supports_gui: bool) {
+    let example_device = example_device_path();
+    let gui_example = if supports_gui {
+        format!("\n  {program} --gui")
+    } else {
+        String::new()
+    };
+    let gui_option = if supports_gui {
+        "\n      --gui           Force GUI mode when supported by the executable."
+    } else {
+        ""
+    };
     println!(
-        "Usage:\n  {0} --list\n  {0} [--yes] [--seed N] [--output FILE] DEVICE\n\nExamples:\n  {0} --list\n  {0} --yes /dev/sdb\n  {0} --yes --output report.txt /dev/sdb\n\nOptions:\n  -l, --list          List removable/USB whole-disk targets.\n  -o, --output FILE   Write the text report to FILE in addition to stdout.\n  -y, --yes           Skip the destructive-operation confirmation prompt.\n      --seed N        Use a fixed 64-bit seed for deterministic sample data.\n  -h, --help          Show this help text.",
-        program
+        "Usage:\n  {0} --list\n  {0} [--yes] [--seed N] [--output FILE] DEVICE\n\nExamples:\n  {0} --list\n  {0} --yes {1}\n  {0} --yes --output report.txt {1}{2}\n\nOptions:\n  -l, --list          List removable/USB whole-disk targets.\n  -o, --output FILE   Write the text report to FILE in addition to stdout.\n  -y, --yes           Skip the destructive-operation confirmation prompt.\n      --seed N        Use a fixed 64-bit seed for deterministic sample data.{3}\n  -h, --help          Show this help text.",
+        program, example_device, gui_example, gui_option
     );
 }
