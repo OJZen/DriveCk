@@ -217,6 +217,7 @@ pub(super) unsafe fn open_report_window(state: &mut AppState) {
     )
     .expect("create report window");
     set_text(hwnd, report_window_title(state.language));
+    apply_window_icon(hwnd);
     center_window(hwnd, Some(state.hwnd), 860, 660);
     state.report_window = Some(hwnd);
     let _ = ShowWindow(hwnd, SW_SHOW);
@@ -292,7 +293,11 @@ unsafe fn paint_report_window(hwnd: HWND, state: &ReportWindowState) {
     fill_rect_color(back_dc, &client, APP_BG);
     draw_panel(back_dc, &layout.header_panel);
 
-    let header_content = inset_rect(layout.header_panel, 14, 14);
+    let header_content = inset_rect(
+        layout.header_panel,
+        scale_for_window(hwnd, 14),
+        scale_for_window(hwnd, 14),
+    );
     let title = state
         .response
         .as_ref()
@@ -318,17 +323,21 @@ unsafe fn paint_report_window(hwnd: HWND, state: &ReportWindowState) {
         header_content.left,
         header_content.top,
         rect_width(header_content),
-        52,
+        scale_for_window(hwnd, 66),
     );
     fill_rect_color(back_dc, &banner_rect, banner_bg);
     frame_rect_color(back_dc, &banner_rect, banner_bg);
 
-    let banner_inner = inset_rect(banner_rect, 12, 8);
+    let banner_inner = inset_rect(
+        banner_rect,
+        scale_for_window(hwnd, 12),
+        scale_for_window(hwnd, 8),
+    );
     let title_rect = make_rect(
         banner_inner.left,
         banner_inner.top,
         rect_width(banner_inner),
-        18,
+        scale_for_window(hwnd, 18),
     );
     draw_text_block(
         back_dc,
@@ -353,7 +362,7 @@ unsafe fn paint_report_window(hwnd: HWND, state: &ReportWindowState) {
         state.ui_font,
     );
 
-    let detail_top = banner_rect.bottom + 6;
+    let detail_top = banner_rect.bottom + scale_for_window(hwnd, 6);
     let target_value = state
         .response
         .as_ref()
@@ -361,12 +370,17 @@ unsafe fn paint_report_window(hwnd: HWND, state: &ReportWindowState) {
         .or_else(|| state.target_path.clone())
         .unwrap_or_else(|| "-".to_string());
     let detail_width = rect_width(header_content);
-    let detail_gap = 12;
+    let detail_gap = scale_for_window(hwnd, 12);
     let left_width = ((detail_width - detail_gap) / 2).max(0);
     let right_width = (detail_width - left_width - detail_gap).max(0);
     draw_metric_row(
         back_dc,
-        make_rect(header_content.left, detail_top, left_width, 22),
+        make_rect(
+            header_content.left,
+            detail_top,
+            left_width,
+            scale_for_window(hwnd, 22),
+        ),
         device_label_text(state.language),
         &target_value,
         state.ui_font,
@@ -382,7 +396,7 @@ unsafe fn paint_report_window(hwnd: HWND, state: &ReportWindowState) {
             header_content.left + left_width + detail_gap,
             detail_top,
             right_width,
-            22,
+            scale_for_window(hwnd, 22),
         ),
         completed_label_text(state.language),
         &completed_value,

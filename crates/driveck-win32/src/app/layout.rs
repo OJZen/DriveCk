@@ -245,7 +245,7 @@ pub(crate) fn current_report_layout(hwnd: HWND) -> ReportLayout {
         margin,
         margin,
         width - margin * 2,
-        scale_for_window(hwnd, 112),
+        scale_for_window(hwnd, 128),
     );
     let edit_top = header_panel.bottom + gap;
     let edit = make_rect(

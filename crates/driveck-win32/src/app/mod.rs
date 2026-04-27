@@ -44,22 +44,23 @@ use windows::{
             WindowsAndMessaging::{
                 BS_PUSHBUTTON, CB_ADDSTRING, CB_DELETESTRING, CB_GETCURSEL, CB_INSERTSTRING,
                 CB_RESETCONTENT, CB_SETCURSEL, CBN_SELCHANGE, CBS_DROPDOWNLIST, CREATESTRUCTW,
-                CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-                ES_AUTOVSCROLL, ES_LEFT, ES_MULTILINE, ES_READONLY, ES_WANTRETURN, GWLP_USERDATA,
-                GetMessageW, GetScrollInfo, GetSystemMetrics, GetWindowLongPtrW, GetWindowRect,
-                HMENU, IDC_ARROW, IDOK, KillTimer, LoadCursorW, MB_ICONERROR, MB_ICONWARNING,
-                MB_OK, MB_OKCANCEL, MESSAGEBOX_STYLE, MINMAXINFO, MSG, MessageBoxW, MoveWindow,
-                PM_REMOVE, PeekMessageW, PostMessageW, PostQuitMessage, RegisterClassW, SB_BOTTOM,
-                SB_CTL, SB_LINEDOWN, SB_LINEUP, SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION,
-                SB_THUMBTRACK, SB_TOP, SBM_SETSCROLLINFO, SBS_VERT, SCROLLINFO, SIF_ALL, SIF_PAGE,
-                SIF_POS, SIF_RANGE, SM_CXSCREEN, SM_CYSCREEN, SW_HIDE, SW_SHOW, SW_SHOWNORMAL,
-                SWP_NOACTIVATE, SWP_NOZORDER, SendMessageW, SetForegroundWindow, SetTimer,
-                SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage,
-                WINDOW_EX_STYLE, WINDOW_STYLE, WM_APP, WM_CLOSE, WM_COMMAND, WM_COPY, WM_CREATE,
-                WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_MOUSEWHEEL,
-                WM_NCCREATE, WM_PAINT, WM_SETFONT, WM_SIZE, WM_TIMER, WM_VSCROLL, WNDCLASSW,
-                WS_BORDER, WS_CHILD, WS_CLIPCHILDREN, WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW,
-                WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
+                CW_USEDEFAULT, CreateWindowExW, DI_NORMAL, DefWindowProcW, DestroyWindow,
+                DispatchMessageW, DrawIconEx, ES_AUTOVSCROLL, ES_LEFT, ES_MULTILINE, ES_READONLY,
+                ES_WANTRETURN, GWLP_USERDATA, GetMessageW, GetScrollInfo, GetSystemMetrics,
+                GetWindowLongPtrW, GetWindowRect, HICON, HMENU, IDC_ARROW, IDOK, IMAGE_ICON,
+                KillTimer, LR_DEFAULTCOLOR, LR_SHARED, LoadCursorW, LoadIconW, LoadImageW,
+                MB_ICONERROR, MB_ICONWARNING, MB_OK, MB_OKCANCEL, MESSAGEBOX_STYLE, MINMAXINFO,
+                MSG, MessageBoxW, MoveWindow, PM_REMOVE, PeekMessageW, PostMessageW,
+                PostQuitMessage, RegisterClassW, SB_BOTTOM, SB_CTL, SB_LINEDOWN, SB_LINEUP,
+                SB_PAGEDOWN, SB_PAGEUP, SB_THUMBPOSITION, SB_THUMBTRACK, SB_TOP, SBM_SETSCROLLINFO,
+                SBS_VERT, SCROLLINFO, SIF_ALL, SIF_PAGE, SIF_POS, SIF_RANGE, SM_CXSCREEN,
+                SM_CYSCREEN, SW_HIDE, SW_SHOW, SW_SHOWNORMAL, SWP_NOACTIVATE, SWP_NOZORDER,
+                SendMessageW, SetForegroundWindow, SetTimer, SetWindowLongPtrW, SetWindowPos,
+                SetWindowTextW, ShowWindow, TranslateMessage, WINDOW_EX_STYLE, WINDOW_STYLE,
+                WM_APP, WM_CLOSE, WM_COMMAND, WM_COPY, WM_CREATE, WM_DESTROY, WM_DPICHANGED,
+                WM_ERASEBKGND, WM_GETMINMAXINFO, WM_MOUSEWHEEL, WM_NCCREATE, WM_PAINT, WM_SETFONT,
+                WM_SIZE, WM_TIMER, WM_VSCROLL, WNDCLASSW, WS_BORDER, WS_CHILD, WS_CLIPCHILDREN,
+                WS_EX_CLIENTEDGE, WS_OVERLAPPEDWINDOW, WS_TABSTOP, WS_VISIBLE, WS_VSCROLL,
             },
         },
     },
@@ -111,6 +112,9 @@ const WM_DRIVECK_FINISHED: u32 = WM_APP + 2;
 const CB_SETMINVISIBLE: u32 = 0x1701;
 const CB_SETITEMHEIGHT: u32 = 0x0153;
 const EM_SETSEL: u32 = 0x00B1;
+const WM_SETICON: u32 = 0x0080;
+const ICON_SMALL: usize = 0;
+const ICON_BIG: usize = 1;
 const UI_TIMER_ID: usize = 1;
 
 const GRID_ROWS: usize = 18;
@@ -122,7 +126,7 @@ const MIN_WINDOW_HEIGHT: i32 = 660;
 const MIN_REPORT_WINDOW_WIDTH: i32 = 740;
 const MIN_REPORT_WINDOW_HEIGHT: i32 = 560;
 const MIN_ABOUT_WINDOW_WIDTH: i32 = 480;
-const MIN_ABOUT_WINDOW_HEIGHT: i32 = 260;
+const MIN_ABOUT_WINDOW_HEIGHT: i32 = 300;
 
 const APP_BG: COLORREF = rgb(247, 249, 252);
 const SURFACE_BG: COLORREF = rgb(255, 255, 255);
@@ -492,6 +496,7 @@ pub fn run() {
         )
         .expect("create main window");
         set_text(hwnd, APP_TITLE);
+        apply_window_icon(hwnd);
         center_window(hwnd, None, window_width, window_height);
 
         let _ = ShowWindow(hwnd, SW_SHOW);
@@ -1606,6 +1611,44 @@ unsafe fn center_window(hwnd: HWND, parent: Option<HWND>, width: i32, height: i3
     );
 }
 
+unsafe fn apply_window_icon(hwnd: HWND) {
+    if let Some(icon) = load_app_icon() {
+        let _ = SendMessageW(
+            hwnd,
+            WM_SETICON,
+            Some(WPARAM(ICON_BIG)),
+            Some(LPARAM(icon.0 as isize)),
+        );
+        let _ = SendMessageW(
+            hwnd,
+            WM_SETICON,
+            Some(WPARAM(ICON_SMALL)),
+            Some(LPARAM(icon.0 as isize)),
+        );
+    }
+}
+
+unsafe fn load_app_icon() -> Option<HICON> {
+    let hinstance = HINSTANCE(GetModuleHandleW(None).unwrap().0);
+    let resource_id = PCWSTR(1 as *const u16);
+    LoadIconW(Some(hinstance), resource_id).ok()
+}
+
+unsafe fn load_app_icon_sized(size: i32) -> Option<HICON> {
+    let hinstance = HINSTANCE(GetModuleHandleW(None).unwrap().0);
+    let resource_id = PCWSTR(1 as *const u16);
+    LoadImageW(
+        Some(hinstance),
+        resource_id,
+        IMAGE_ICON,
+        size,
+        size,
+        LR_DEFAULTCOLOR | LR_SHARED,
+    )
+    .ok()
+    .map(|handle| HICON(handle.0))
+}
+
 unsafe fn paint_window(hwnd: HWND, state: &AppState) {
     let mut paint = PAINTSTRUCT::default();
     let hdc = BeginPaint(hwnd, &mut paint);
@@ -1969,6 +2012,10 @@ unsafe fn paint_summary_panel(hdc: HDC, state: &AppState, panel: &RECT) {
     );
 }
 
+fn report_banner_height(state: &AppState) -> i32 {
+    scale_for_window(state.hwnd, 52)
+}
+
 unsafe fn paint_idle_summary(hdc: HDC, state: &AppState, content: RECT) {
     let row_height = scale_for_window(state.hwnd, 22);
     let row_gap = scale_for_window(state.hwnd, 28);
@@ -1976,7 +2023,7 @@ unsafe fn paint_idle_summary(hdc: HDC, state: &AppState, content: RECT) {
         content.left,
         content.top,
         rect_width(content),
-        scale_for_window(state.hwnd, 44),
+        report_banner_height(state),
     );
     draw_banner(
         hdc,
@@ -2033,7 +2080,7 @@ unsafe fn paint_live_summary(hdc: HDC, state: &AppState, content: RECT) {
         content.left,
         content.top,
         rect_width(content),
-        scale_for_window(state.hwnd, 58),
+        report_banner_height(state),
     );
     draw_banner(
         hdc,
@@ -2128,7 +2175,7 @@ unsafe fn paint_result_summary(
         content.left,
         content.top,
         rect_width(content),
-        scale_for_window(state.hwnd, 64),
+        report_banner_height(state),
     );
     draw_banner(
         hdc,
@@ -2476,8 +2523,14 @@ unsafe fn draw_banner(
     fill_rect_color(hdc, rect, background);
     frame_rect_color(hdc, rect, background);
 
-    let inner = inset_rect(*rect, 14, 10);
-    let title_rect = make_rect(inner.left, inner.top, rect_width(inner), 20);
+    let height = rect_height(*rect).max(1);
+    let pad_x = (height * 24 / 100).clamp(12, 18);
+    let pad_y = (height * 8 / 100).clamp(4, 10);
+    let line_gap = (height * 4 / 100).clamp(2, 4);
+    let inner = inset_rect(*rect, pad_x, pad_y);
+    let line_height = ((rect_height(inner) - line_gap) / 2).max(1);
+    let title_height = line_height;
+    let title_rect = make_rect(inner.left, inner.top, rect_width(inner), title_height);
     draw_text_block(
         hdc,
         title_rect,
@@ -2486,7 +2539,13 @@ unsafe fn draw_banner(
         DT_LEFT | DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS,
         font,
     );
-    let subtitle_rect = make_rect(inner.left, title_rect.bottom + 2, rect_width(inner), 18);
+    let subtitle_top = title_rect.bottom + line_gap;
+    let subtitle_rect = make_rect(
+        inner.left,
+        subtitle_top,
+        rect_width(inner),
+        line_height,
+    );
     draw_text_block(
         hdc,
         subtitle_rect,
@@ -2602,7 +2661,7 @@ unsafe fn draw_key_value_row_with_color(
 }
 
 unsafe fn draw_metric_row(hdc: HDC, rect: RECT, key: &str, value: &str, font: HGDIOBJ) {
-    let key_width = ((rect_width(rect) * 42) / 100).clamp(102, 152);
+    let key_width = metric_key_width(rect);
     let key_rect = make_rect(rect.left, rect.top, key_width, rect_height(rect));
     let value_rect = make_rect(
         rect.left + key_width + 8,
@@ -2629,7 +2688,7 @@ unsafe fn draw_metric_row(hdc: HDC, rect: RECT, key: &str, value: &str, font: HG
 }
 
 unsafe fn draw_metric_multiline(hdc: HDC, rect: RECT, key: &str, value: &str, font: HGDIOBJ) {
-    let key_width = ((rect_width(rect) * 36) / 100).clamp(100, 138);
+    let key_width = metric_key_width(rect);
     let key_rect = make_rect(rect.left, rect.top, key_width, rect_height(rect));
     let value_rect = make_rect(
         rect.left + key_width + 8,
@@ -2642,7 +2701,7 @@ unsafe fn draw_metric_multiline(hdc: HDC, rect: RECT, key: &str, value: &str, fo
         key_rect,
         key,
         TEXT_PRIMARY,
-        DT_LEFT | DT_SINGLELINE | DT_VCENTER,
+        DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS,
         font,
     );
     draw_text_block(
@@ -2653,6 +2712,10 @@ unsafe fn draw_metric_multiline(hdc: HDC, rect: RECT, key: &str, value: &str, fo
         DT_LEFT | DT_WORDBREAK | DT_NOPREFIX,
         font,
     );
+}
+
+fn metric_key_width(rect: RECT) -> i32 {
+    ((rect_width(rect) * 42) / 100).clamp(102, 152)
 }
 
 unsafe fn draw_text_block(

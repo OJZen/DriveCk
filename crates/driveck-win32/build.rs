@@ -1,6 +1,7 @@
 #[cfg(windows)]
 fn main() {
     let mut resource = winres::WindowsResource::new();
+    resource.set_icon("..\\..\\icon\\windows\\driveck.ico");
     resource.set_manifest_file("app.manifest");
     resource.compile().expect("compile Win32 resources");
 }

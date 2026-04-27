@@ -143,7 +143,7 @@ pub(super) unsafe fn open_about_window(state: &mut AppState) {
         CW_USEDEFAULT,
         CW_USEDEFAULT,
         560,
-        320,
+        360,
         Some(state.hwnd),
         None,
         Some(HINSTANCE(GetModuleHandleW(None).unwrap().0)),
@@ -151,7 +151,8 @@ pub(super) unsafe fn open_about_window(state: &mut AppState) {
     )
     .expect("create about window");
     set_text(hwnd, about_window_title(state.language));
-    center_window(hwnd, Some(state.hwnd), 560, 320);
+    apply_window_icon(hwnd);
+    center_window(hwnd, Some(state.hwnd), 560, 360);
     state.about_window = Some(hwnd);
     let _ = ShowWindow(hwnd, SW_SHOW);
 }
@@ -220,7 +221,28 @@ unsafe fn paint_about_window(hwnd: HWND, state: &AboutWindowState) {
     draw_panel(back_dc, &layout.hero_panel);
 
     let content = inset_rect(layout.hero_panel, 20, 20);
-    let title_rect = make_rect(content.left, content.top, rect_width(content), 24);
+    let icon_size = scale_for_window(hwnd, 64);
+    let icon_gap = scale_for_window(hwnd, 16);
+    let icon_rect = make_rect(content.left, content.top, icon_size, icon_size);
+    let title_rect = make_rect(
+        icon_rect.right + icon_gap,
+        content.top,
+        (content.right - icon_rect.right - icon_gap).max(0),
+        icon_size,
+    );
+    if let Some(icon) = load_app_icon_sized(icon_size) {
+        let _ = DrawIconEx(
+            back_dc,
+            icon_rect.left,
+            icon_rect.top,
+            icon,
+            icon_size,
+            icon_size,
+            0,
+            None,
+            DI_NORMAL,
+        );
+    }
     draw_text_block(
         back_dc,
         title_rect,
@@ -230,7 +252,7 @@ unsafe fn paint_about_window(hwnd: HWND, state: &AboutWindowState) {
         state.ui_font,
     );
 
-    let mut row_top = title_rect.bottom + 18;
+    let mut row_top = icon_rect.bottom + scale_for_window(hwnd, 16);
     for (label, value) in [
         (
             project_url_label_text(state.language),
