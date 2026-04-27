@@ -48,7 +48,7 @@ struct DriveCkMacCLI {
 
             let options = try parseOptions(arguments: CommandLine.arguments)
             if options.showHelp {
-                printUsage(program: CommandLine.arguments.first ?? "driveck-mac")
+                printUsage(program: CommandLine.arguments.first ?? "driveck")
                 return 0
             }
 

@@ -53,8 +53,9 @@ frontends:
 cargo build
 cargo build --workspace
 cargo test --workspace
-cargo build --release -p driveck-cli
-cargo build --release -p driveck-win32
+./script/build.sh cli release
+./script/build.sh gtk release
+./script/build.sh macos-app release
 ```
 
 At the workspace root, `cargo build` covers the shared core and CLI by default.
@@ -64,17 +65,22 @@ frontend.
 ### Helper Scripts
 
 ```bash
-./script/build_rust.sh workspace
-./script/build_rust.sh cli release
-./script/build_rust.sh win32 release
-./script/build_macos_cli.sh Debug
-./script/build_macos_app.sh Debug
+./script/build.sh workspace
+./script/build.sh cli release
+./script/build.sh gtk release
+./script/build.sh win32 release
+./script/build.sh macos-cli debug
+./script/build.sh macos-app release
+./script/package_release.sh cli
+./script/package_release.sh gtk
+./script/package_release.sh macos-app --snapshot
 ./script/build_and_run.sh run
 ./script/verify_all.sh
 ```
 
-- `build_rust.sh` builds the selected Rust target in `debug` or `release`.
-- `build_macos_cli.sh` and `build_macos_app.sh` wrap the matching Xcode builds.
+- `build.sh` is the primary build entrypoint. It accepts `workspace`, `core`, `ffi`, `cli`, `gtk`, `win32`, `macos-cli`, and `macos-app`, and normalizes `debug` / `release` across Cargo and Xcode builds.
+- `package_release.sh` builds a release bundle and writes a concise archive named `DriveCk[-cli]-<platform>-<arch>-v<version>[+<shortsha>[.dirty]]`.
+- `build_rust.sh`, `build_macos_cli.sh`, and `build_macos_app.sh` remain as compatibility wrappers around `build.sh`.
 - `build_and_run.sh` rebuilds and launches the macOS app, but refuses to replace
   a running instance automatically so an in-progress validation cannot be
   interrupted mid-restore.
@@ -145,43 +151,52 @@ The dashboard supports:
 Mounted targets stay blocked until every partition or volume on the physical
 disk has been unmounted.
 
-### Windows Release Packaging
+### Release Packaging
 
-This repository does not currently include a Windows installer, MSI/MSIX
-manifest, or code-signing pipeline. Today, the Windows release artifact is the
-single executable produced by Cargo:
+Use `./script/package_release.sh <target>` on the matching host platform to
+build and stage a release archive:
 
-```powershell
-cargo build --release -p driveck-win32
-# artifact: target\release\driveck-win32.exe
+```bash
+./script/package_release.sh cli
+./script/package_release.sh gtk
+./script/package_release.sh macos-app
 ```
 
-The workspace release profile already enables thin LTO and symbol stripping, so
-the release executable is the intended package candidate.
+Representative archive names:
 
-For manual distribution today:
+- `DriveCk-cli-linux-x86_64-v0.1.0.tar.gz`
+- `DriveCk-linux-x86_64-v0.1.0.tar.gz`
+- `DriveCk-cli-macos-arm64-v0.1.0.zip`
+- `DriveCk-macos-arm64-v0.1.0.zip`
+- `DriveCk-windows-x86_64-v0.1.0.zip`
 
-1. Build `target\release\driveck-win32.exe`.
-2. Put the executable in a ZIP together with the relevant README notes or a short operator guide.
-3. Test that ZIP on the target Windows environment before publishing it broadly.
+Archive names stay version-only by default. Pass `--snapshot` to append
+`+<shortsha>` from a clean checkout or `+<shortsha>.dirty` from a dirty one.
 
-If you need an installer, code signing, or an enterprise deployment format,
-that still needs to be added on top of the current repository.
+The release packaging flow standardizes the staged product names too:
+
+- CLI archives expose `driveck`
+- GTK archives expose `driveck` plus `icon/linux/`
+- Win32 archives expose `DriveCk.exe`
+- macOS app archives expose `DriveCk.app` plus the `driveck` helper next to the app bundle
+
+This repository still does not include an installer, MSI/MSIX manifest, or
+code-signing pipeline.
 
 macOS CLI from Xcode:
 
 ```bash
 xcodebuild -project macos/DriveCkMac.xcodeproj -scheme DriveCkMacCLI -configuration Debug build
-./macos/Build/Debug/driveck-mac --list
-./macos/Build/Debug/driveck-mac --yes disk2
-./macos/Build/Debug/driveck-mac --yes --output report.txt /dev/rdisk2
+./macos/Build/Debug/driveck --list
+./macos/Build/Debug/driveck --yes disk2
+./macos/Build/Debug/driveck --yes --output report.txt /dev/rdisk2
 ```
 
 macOS app from Xcode:
 
 ```bash
 xcodebuild -project macos/DriveCkMac.xcodeproj -scheme DriveCkMacApp -configuration Debug build
-open ./macos/Build/Debug/DriveCkMacApp.app
+open ./macos/Build/Debug/DriveCk.app
 ```
 
 Cross-check the Windows frontend from Linux:

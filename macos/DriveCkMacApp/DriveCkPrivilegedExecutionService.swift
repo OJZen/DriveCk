@@ -222,9 +222,9 @@ enum DriveCkPrivilegedExecutionService {
         let candidates = [
             Bundle.main.bundleURL
                 .deletingLastPathComponent()
-                .appendingPathComponent("driveck-mac"),
+                .appendingPathComponent("driveck"),
             Bundle.main.bundleURL
-                .appendingPathComponent("Contents/Resources/driveck-mac"),
+                .appendingPathComponent("Contents/Resources/driveck"),
         ]
 
         if let helperURL = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0.path) }) {

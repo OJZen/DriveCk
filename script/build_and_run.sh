@@ -8,7 +8,7 @@ APP_BUNDLE="$ROOT_DIR/macos/Build/Debug/${MACOS_APP_NAME}.app"
 APP_BINARY="$APP_BUNDLE/Contents/MacOS/$MACOS_APP_NAME"
 
 build_app() {
-  "$ROOT_DIR/script/build_macos_app.sh" Debug
+  "$ROOT_DIR/script/build.sh" macos-app debug
 }
 
 open_app() {

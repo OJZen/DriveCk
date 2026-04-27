@@ -408,8 +408,8 @@ CLI 与 GUI 都调用它，但消费方式不同：
 
 在 `macos/DriveCkMac.xcodeproj` 中建立两个 target：
 
-1. `DriveCkMacApp`：macOS app
-2. `driveck-mac-cli`：command line tool
+1. `DriveCkMacApp`：macOS app target（product: `DriveCk.app`）
+2. `DriveCkMacCLI`：command line tool target（product: `driveck`）
 
 两个 target 共享 `DriveCkMacShared/` 源文件。
 

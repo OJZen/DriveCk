@@ -17,8 +17,8 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
-		A00000000000000000000201 /* DriveCkMacApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DriveCkMacApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		A00000000000000000000202 /* driveck-mac */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = "driveck-mac"; sourceTree = BUILT_PRODUCTS_DIR; };
+		A00000000000000000000201 /* DriveCk.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = DriveCk.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A00000000000000000000202 /* driveck */ = {isa = PBXFileReference; explicitFileType = "compiled.mach-o.executable"; includeInIndex = 0; path = driveck; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -76,8 +76,8 @@
 		A00000000000000000000002 /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				A00000000000000000000201 /* DriveCkMacApp.app */,
-				A00000000000000000000202 /* driveck-mac */,
+				A00000000000000000000201 /* DriveCk.app */,
+				A00000000000000000000202 /* driveck */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -105,8 +105,8 @@
 			name = DriveCkMacApp;
 			packageProductDependencies = (
 			);
-			productName = DriveCkMacApp;
-			productReference = A00000000000000000000201 /* DriveCkMacApp.app */;
+			productName = DriveCk;
+			productReference = A00000000000000000000201 /* DriveCk.app */;
 			productType = "com.apple.product-type.application";
 		};
 		A00000000000000000000402 /* DriveCkMacCLI */ = {
@@ -128,8 +128,8 @@
 			name = DriveCkMacCLI;
 			packageProductDependencies = (
 			);
-			productName = "driveck-mac";
-			productReference = A00000000000000000000202 /* driveck-mac */;
+			productName = driveck;
+			productReference = A00000000000000000000202 /* driveck */;
 			productType = "com.apple.product-type.tool";
 		};
 /* End PBXNativeTarget section */
@@ -278,7 +278,7 @@
 					"-ldriveck_ffi",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = io.github.ojzen.driveck.macos.app;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = DriveCk;
 				SUPPORTED_PLATFORMS = macosx;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 			};
@@ -312,7 +312,7 @@
 					"-ldriveck_ffi",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = io.github.ojzen.driveck.macos.app;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_NAME = DriveCk;
 				SUPPORTED_PLATFORMS = macosx;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 			};
@@ -337,7 +337,7 @@
 					"-ldriveck_ffi",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = io.github.ojzen.driveck.macos.cli;
-				PRODUCT_NAME = "driveck-mac";
+				PRODUCT_NAME = driveck;
 				SUPPORTED_PLATFORMS = macosx;
 			};
 			name = Debug;
@@ -361,7 +361,7 @@
 					"-ldriveck_ffi",
 				);
 				PRODUCT_BUNDLE_IDENTIFIER = io.github.ojzen.driveck.macos.cli;
-				PRODUCT_NAME = "driveck-mac";
+				PRODUCT_NAME = driveck;
 				SUPPORTED_PLATFORMS = macosx;
 			};
 			name = Release;
