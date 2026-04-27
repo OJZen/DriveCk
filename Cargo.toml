@@ -28,7 +28,6 @@ tempfile = "3.23.0"
 thiserror = "2.0.17"
 driveck-cli = { path = "crates/driveck-cli" }
 driveck-core = { path = "crates/driveck-core" }
-driveck-cli = { path = "crates/driveck-cli" }
 driveck-ffi = { path = "crates/driveck-ffi" }
 windows = "0.61.3"
 
