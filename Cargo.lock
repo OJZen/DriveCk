@@ -134,6 +134,7 @@ dependencies = [
 name = "driveck-gtk"
 version = "0.1.0"
 dependencies = [
+ "driveck-cli",
  "driveck-core",
  "glib-build-tools",
  "gtk4",
