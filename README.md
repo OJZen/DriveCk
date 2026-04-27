@@ -11,12 +11,21 @@ integrity on sampled regions, and generates a human-readable report.
 
 ## Screenshots
 
-Current screenshots are from the Linux GTK frontend. macOS and Windows
-screenshots can be added alongside them later.
+Current screenshots cover the Linux GTK frontend and the native Win32 frontend.
+
+### Linux GTK
 
 ![Linux GTK target selection](resources/imgs/linux-gtk-first.png)
 
 ![Linux GTK validation result](resources/imgs/linux-gtk-good.png)
+
+### Windows Win32
+
+![Win32 target selection](resources/imgs/win32-first.png)
+
+![Win32 successful validation](resources/imgs/win32-good.png)
+
+![Win32 validation failure](resources/imgs/win32-bad.png)
 
 ## Features
 
@@ -68,12 +77,31 @@ CLI release packages also extract to a short executable name:
 ./driveck --yes /dev/sdb
 ```
 
-### macOS and Windows
+### Windows Win32
+
+Run from a Windows shell initialized with the MSVC toolchain, such as
+Developer PowerShell for VS 2022:
+
+```powershell
+cargo run -p driveck-win32
+cargo build --release -p driveck-win32
+```
+
+If you use the packaged Windows GUI release, extract the archive and run:
+
+```powershell
+.\DriveCk.exe
+```
+
+The Win32 frontend:
+
+- discovers removable and USB whole-disk targets
+- blocks mounted disks until every volume on the physical disk has been unmounted
+- shows the live validation grid, progress, summary, and report preview during a run
+
+### macOS
 
 - macOS uses native frontends: a SwiftUI + AppKit app and a native CLI.
-- Windows uses a native Win32 frontend.
-- Additional screenshots for those frontends can be added to the same
-  `resources/imgs/` area later.
 
 ## Release package names
 
