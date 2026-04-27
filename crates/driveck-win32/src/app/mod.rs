@@ -444,7 +444,7 @@ struct ProgressPayload {
 }
 
 struct FinishedPayload {
-    target_path: String,
+    target: TargetInfo,
     response: Option<ValidationResponse>,
     report_text: Option<String>,
     error: Option<String>,
@@ -610,10 +610,11 @@ unsafe extern "system" fn window_proc(
                 let _ = KillTimer(Some(hwnd), UI_TIMER_ID);
                 state.cancel_requested.store(false, Ordering::Relaxed);
                 state.stop_requested = false;
+                sync_discovered_target(state, &payload.target);
                 state.last_report_target_path = payload
                     .report_text
                     .as_ref()
-                    .map(|_| payload.target_path.clone());
+                    .map(|_| payload.target.path.clone());
                 state.last_response = payload.response.clone();
                 state.report_text = payload.report_text.clone();
                 state.validation_started_at = None;
@@ -1107,21 +1108,6 @@ unsafe fn start_validation(state: &mut AppState) {
         return;
     }
 
-    let target = match prepare_target_for_validation(state, target) {
-        Ok(target) => target,
-        Err(error) => {
-            state.set_status(start_failed_text(state.language), Tone::Danger);
-            show_message(
-                state.hwnd,
-                cannot_start_validation_title(state.language),
-                &error,
-                MB_ICONWARNING,
-            );
-            let _ = InvalidateRect(Some(state.hwnd), None, true);
-            return;
-        }
-    };
-
     state.cancel_requested.store(false, Ordering::Relaxed);
     state.stop_requested = false;
     state.closing_requested = false;
@@ -1130,25 +1116,55 @@ unsafe fn start_validation(state: &mut AppState) {
     state.last_report_target_path = None;
     state.last_error = None;
     state.validation_grid_state.reset();
-    state.current_phase_raw = "validating".to_string();
+    let starts_with_unmount = target.is_mounted;
+    state.current_phase_raw = if starts_with_unmount {
+        "unmounting".to_string()
+    } else {
+        "validating".to_string()
+    };
     state.progress_current = 0;
     state.progress_total = GRID_SAMPLES;
     state.validation_started_at = Some(Instant::now());
     state.validation_started_label = Some(Local::now().format("%Y-%m-%d %H:%M:%S").to_string());
     state.last_elapsed_text = Some("00:00:00".to_string());
-    state.set_status(validating_text(state.language), Tone::Accent);
+    state.set_status(
+        if starts_with_unmount {
+            unmounting_text(state.language)
+        } else {
+            validating_text(state.language)
+        },
+        if starts_with_unmount {
+            Tone::Warning
+        } else {
+            Tone::Accent
+        },
+    );
     send_message(state.progress_bar, PBM_SETPOS, 0, 0);
     let _ = SetTimer(Some(state.hwnd), UI_TIMER_ID, 1000, None);
 
     let hwnd_raw = state.hwnd.0 as isize;
     let language = state.language;
     let cancel_requested = state.cancel_requested.clone();
+    let inspected_target = target;
     state.worker = Some(thread::spawn(move || {
         let hwnd = HWND(hwnd_raw as *mut c_void);
         let context = WorkerContext {
             hwnd,
             cancel_requested,
             language,
+        };
+        let target = match prepare_target_for_validation(inspected_target.clone(), context.language)
+        {
+            Ok(target) => target,
+            Err(error) => {
+                let payload = Box::new(build_finished_payload(
+                    inspected_target,
+                    Err(error),
+                    context.language,
+                ));
+                unsafe { post_boxed_message(hwnd, WM_DRIVECK_FINISHED, payload) };
+                return;
+            }
         };
         let result = ffi_validate_target(&target, &ValidationOptions::default(), &context);
         let payload = Box::new(build_finished_payload(target, result, context.language));
@@ -1207,36 +1223,34 @@ fn build_finished_payload(
             };
 
             FinishedPayload {
-                target_path: target.path.clone(),
+                target,
                 response: execution.response,
                 report_text,
                 error,
             }
         }
-        Err(error) => FinishedPayload {
-            target_path: target.path.clone(),
-            response: None,
-            report_text: Some(report_error_preview(language, &target, &error)),
-            error: Some(error),
-        },
+        Err(error) => {
+            let report_text = Some(report_error_preview(language, &target, &error));
+            FinishedPayload {
+                target,
+                response: None,
+                report_text,
+                error: Some(error),
+            }
+        }
     }
 }
 
-unsafe fn prepare_target_for_validation(
-    state: &mut AppState,
+fn prepare_target_for_validation(
     mut target: TargetInfo,
+    language: Language,
 ) -> Result<TargetInfo, String> {
     if target.is_mounted {
-        state.current_phase_raw = "unmounting".to_string();
-        state.set_status(unmounting_text(state.language), Tone::Warning);
-        let _ = InvalidateRect(Some(state.hwnd), None, true);
-
         target = ffi_unmount_target(&target.path)?;
-        sync_discovered_target(state, &target);
     }
 
     if target.is_mounted {
-        return Err(match state.language {
+        return Err(match language {
             Language::English => {
                 "DriveCk could not dismount every volume on the selected disk. Close any open files and try again."
                     .to_string()
@@ -2540,12 +2554,7 @@ unsafe fn draw_banner(
         font,
     );
     let subtitle_top = title_rect.bottom + line_gap;
-    let subtitle_rect = make_rect(
-        inner.left,
-        subtitle_top,
-        rect_width(inner),
-        line_height,
-    );
+    let subtitle_rect = make_rect(inner.left, subtitle_top, rect_width(inner), line_height);
     draw_text_block(
         hdc,
         subtitle_rect,
