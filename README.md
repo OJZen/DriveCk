@@ -38,8 +38,20 @@ Current screenshots cover the Linux GTK frontend and the native Win32 frontend.
 
 - Validate only whole devices, not partitions or image files.
 - Sampled regions are temporarily overwritten and then restored.
-- Unmount the target before validation.
+- DriveCk checks whether the target is safe to validate and blocks mounted or
+  in-use disks until they are ready.
+- The tool is designed to restore the sampled regions it touches, but you
+  should still back up important data before validating any real device.
 - Raw-device access may require administrator privileges.
+
+## How validation works
+
+1. DriveCk discovers removable and USB whole-disk targets.
+2. It checks target state and only proceeds when the device can be validated safely.
+3. It samples regions across the device, performs the write / read-back /
+   restore cycle, and updates the live validation grid as it goes.
+4. It generates a final report with the verdict, validated size, and other
+   summary details.
 
 ## Quick start
 
@@ -60,6 +72,36 @@ If you use the packaged Linux GTK release, extract the archive and run:
 When the GTK app needs elevated access on Linux, it requests it through a GUI
 authentication prompt.
 
+### Linux installer
+
+To install the Linux GUI package into standard locations:
+
+```bash
+./script/install_linux.sh --user target/release/DriveCk-gui-linux-x86_64-v0.1.0.tar.gz
+```
+
+To install only the Linux CLI package:
+
+```bash
+./script/install_linux.sh --user target/release/DriveCk-cli-linux-x86_64-v0.1.0.tar.gz
+```
+
+Use `--system` instead of `--user` if you want the files installed under
+`/usr/local` instead of `~/.local`.
+
+After installation:
+
+- GUI install: launch **DriveCk** from the desktop menu, or run `driveck-gui`
+- GUI install with CLI arguments: `driveck-gui --list`
+- CLI-only install: `driveck --list`
+
+To uninstall again:
+
+```bash
+./script/uninstall_linux.sh --user --all
+./script/uninstall_linux.sh --system --gui
+```
+
 ### CLI
 
 Run from source:
@@ -76,6 +118,9 @@ CLI release packages also extract to a short executable name:
 ./driveck --list
 ./driveck --yes /dev/sdb
 ```
+
+The Linux GUI package now also understands these CLI arguments. After a GUI
+install, use `driveck-gui --list` or `driveck-gui --yes /dev/sdb`.
 
 ### Windows Win32
 

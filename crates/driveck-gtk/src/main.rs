@@ -191,6 +191,7 @@ mod app {
 
     pub enum LaunchMode {
         App,
+        Cli,
         ValidateHelper { device_path: String },
     }
 
@@ -1189,7 +1190,8 @@ mod app {
                     device_path: device_path.clone(),
                 })
             }
-            _ => Ok(LaunchMode::App),
+            Some(_) => Ok(LaunchMode::Cli),
+            None => Ok(LaunchMode::App),
         }
     }
 
@@ -1781,8 +1783,17 @@ mod app {
             ];
             match parse_launch_mode(&args).expect("mode should parse") {
                 LaunchMode::ValidateHelper { device_path } => assert_eq!(device_path, "/dev/sdb"),
-                LaunchMode::App => panic!("helper mode should be selected"),
+                LaunchMode::App | LaunchMode::Cli => panic!("helper mode should be selected"),
             }
+        }
+
+        #[test]
+        fn launch_mode_uses_cli_when_args_are_present() {
+            let args = vec!["driveck".to_string(), "--list".to_string()];
+            assert!(matches!(
+                parse_launch_mode(&args).expect("mode should parse"),
+                LaunchMode::Cli
+            ));
         }
     }
 }
@@ -1792,6 +1803,9 @@ fn main() {
     let args = std::env::args().collect::<Vec<_>>();
     match app::parse_launch_mode(&args) {
         Ok(app::LaunchMode::App) => app::run(),
+        Ok(app::LaunchMode::Cli) => {
+            std::process::exit(driveck_cli::run_with_args_handled(&args));
+        }
         Ok(app::LaunchMode::ValidateHelper { device_path }) => {
             std::process::exit(app::run_validate_helper(&device_path));
         }

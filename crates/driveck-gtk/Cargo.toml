@@ -10,6 +10,7 @@ name = "driveck"
 path = "src/main.rs"
 
 [dependencies]
+driveck-cli.workspace = true
 driveck-core.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -129,6 +129,42 @@ Packaging also standardizes staged product names:
 Release archives intentionally omit `README.md` and only stage the runtime
 artifacts needed by that target.
 
+## Linux installer
+
+The repository now includes a Linux installer script:
+
+```bash
+./script/install_linux.sh --user target/release/DriveCk-gui-linux-x86_64-v0.1.0.tar.gz
+./script/install_linux.sh --system target/release/DriveCk-cli-linux-x86_64-v0.1.0.tar.gz
+```
+
+Install locations follow standard local paths instead of writing arbitrary files:
+
+| Mode | Payload root | Executable entry | Desktop / icon data |
+| --- | --- | --- | --- |
+| `--user` | `~/.local/lib/driveck` | `~/.local/bin/driveck` for CLI | `~/.local/share/applications`, `~/.local/share/icons` |
+| `--system` | `/usr/local/lib/driveck` | `/usr/local/bin/driveck` for CLI | `/usr/local/share/applications`, `/usr/local/share/icons` |
+
+Behavior:
+
+- GUI installs keep the application binary under the managed payload root and
+  install a `.desktop` launcher plus hicolor icons.
+- GUI installs also expose a `driveck-gui` symlink so the same binary can be
+  used in GUI mode or CLI mode.
+- CLI installs keep the payload versioned under the managed root and expose a
+  `driveck` symlink in the standard bin directory.
+- Existing unmanaged files are never overwritten.
+
+The matching uninstaller is:
+
+```bash
+./script/uninstall_linux.sh --user --all
+./script/uninstall_linux.sh --system --gui
+```
+
+It removes only DriveCk-managed GUI/CLI installs from the selected scope and
+leaves unrelated files alone.
+
 ## Running locally
 
 ### Rust CLI
@@ -144,6 +180,12 @@ cargo run -p driveck-cli -- --yes --output report.txt /dev/sdb
 ```bash
 cargo run -p driveck-gtk
 ```
+
+The GTK binary now behaves like this on Linux:
+
+- no arguments: start the GUI
+- CLI arguments such as `--list` or `--yes /dev/sdb`: run in CLI mode
+- `--validate-helper`: reserved for the internal privileged helper flow
 
 ### Win32
 
