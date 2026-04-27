@@ -77,6 +77,13 @@ Use:
 ./script/package_release.sh <target>
 ```
 
+On Windows PowerShell, prefer the wrapper:
+
+```powershell
+.\script\package_release.ps1 win32
+.\script\package_release.ps1 cli
+```
+
 Supported packaging targets:
 
 - `cli`

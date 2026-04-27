@@ -93,6 +93,12 @@ If you use the packaged Windows GUI release, extract the archive and run:
 .\DriveCk.exe
 ```
 
+To package the Windows release from PowerShell, prefer:
+
+```powershell
+.\script\package_release.ps1 win32
+```
+
 The Win32 frontend:
 
 - discovers removable and USB whole-disk targets
