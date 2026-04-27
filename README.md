@@ -77,13 +77,20 @@ CLI release packages also extract to a short executable name:
 
 ## Release package names
 
-- GUI packages: `DriveCk-<platform>-<arch>-v<version>`
+Release archives are normalized by distribution edition rather than the
+frontend implementation detail.
+
 - CLI packages: `DriveCk-cli-<platform>-<arch>-v<version>`
+- GUI packages: `DriveCk-gui-<platform>-<arch>-v<version>`
 
 Examples:
 
-- `DriveCk-linux-x86_64-v0.1.0.tar.gz`
 - `DriveCk-cli-linux-x86_64-v0.1.0.tar.gz`
+- `DriveCk-gui-linux-x86_64-v0.1.0.tar.gz`
+- `DriveCk-cli-windows-x86_64-v0.1.0.zip`
+- `DriveCk-gui-windows-x86_64-v0.1.0.zip`
+- `DriveCk-cli-macos-arm64-v0.1.0.zip`
+- `DriveCk-gui-macos-arm64-v0.1.0.zip`
 
 ## Developer docs
 

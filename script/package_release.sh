@@ -36,8 +36,10 @@ archive_stage_dir() {
           cd "$stage_root"
           zip -qry "$archive_path" "$stage_name"
         )
+      elif command -v tar >/dev/null 2>&1; then
+        tar -C "$stage_root" -a -cf "$archive_path" "$stage_name"
       else
-        die "zip packaging requires either ditto or zip."
+        die "zip packaging requires ditto, zip, or tar with zip support."
       fi
       ;;
     *)
@@ -109,7 +111,7 @@ case "$TARGET" in
   gtk)
     [ "${HOST_OS:-}" = "linux" ] || die "gtk packaging requires a Linux host."
     PLATFORM_ID="linux"
-    EDITION_ID=""
+    EDITION_ID="gui"
     ARCHIVE_FORMAT="tar.gz"
     STAGED_BINARY_NAME="driveck"
     BUILT_BINARY_PATH="$ROOT_DIR/target/release/driveck"
@@ -118,7 +120,7 @@ case "$TARGET" in
   win32)
     [ "${HOST_OS:-}" = "windows" ] || die "win32 packaging requires a Windows host."
     PLATFORM_ID="windows"
-    EDITION_ID=""
+    EDITION_ID="gui"
     ARCHIVE_FORMAT="zip"
     STAGED_BINARY_NAME="DriveCk.exe"
     BUILT_BINARY_PATH="$ROOT_DIR/target/release/driveck-win32.exe"
@@ -136,7 +138,7 @@ case "$TARGET" in
   macos-app)
     [ "${HOST_OS:-}" = "macos" ] || die "macos-app packaging requires a macOS host."
     PLATFORM_ID="macos"
-    EDITION_ID=""
+    EDITION_ID="gui"
     ARCHIVE_FORMAT="zip"
     STAGED_BINARY_NAME="$MACOS_APP_NAME.app"
     BUILT_BINARY_PATH="$ROOT_DIR/macos/Build/Release/$MACOS_APP_NAME.app"
@@ -152,11 +154,7 @@ if git_worktree_dirty && [ "$SNAPSHOT_MODE" != "snapshot" ]; then
   echo "Packaging from a dirty worktree; archive names stay version-only unless you pass --snapshot." >&2
 fi
 
-ARTIFACT_BASENAME="DriveCk"
-if [ -n "$EDITION_ID" ]; then
-  ARTIFACT_BASENAME="${ARTIFACT_BASENAME}-${EDITION_ID}"
-fi
-ARTIFACT_BASENAME="${ARTIFACT_BASENAME}-${PLATFORM_ID}-${HOST_ARCH}-${VERSION}${VERSION_SUFFIX}"
+ARTIFACT_BASENAME="DriveCk-${EDITION_ID}-${PLATFORM_ID}-${HOST_ARCH}-${VERSION}${VERSION_SUFFIX}"
 ARCHIVE_PATH="$OUTPUT_DIR/$ARTIFACT_BASENAME.$ARCHIVE_FORMAT"
 STAGING_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/driveck-package.XXXXXX")"
 STAGE_DIR="$STAGING_ROOT/$ARTIFACT_BASENAME"

@@ -90,31 +90,34 @@ Examples:
 ```bash
 ./script/package_release.sh cli
 ./script/package_release.sh gtk
+./script/package_release.sh win32
 ./script/package_release.sh macos-app
 ./script/package_release.sh macos-app --snapshot
 ```
 
 Archive naming:
 
-- GUI packages: `DriveCk-<platform>-<arch>-v<version>`
 - CLI packages: `DriveCk-cli-<platform>-<arch>-v<version>`
+- GUI packages: `DriveCk-gui-<platform>-<arch>-v<version>`
 
 Examples:
 
-- `DriveCk-linux-x86_64-v0.1.0.tar.gz`
 - `DriveCk-cli-linux-x86_64-v0.1.0.tar.gz`
-- `DriveCk-macos-arm64-v0.1.0.zip`
-- `DriveCk-windows-x86_64-v0.1.0.zip`
+- `DriveCk-gui-linux-x86_64-v0.1.0.tar.gz`
+- `DriveCk-cli-windows-x86_64-v0.1.0.zip`
+- `DriveCk-gui-windows-x86_64-v0.1.0.zip`
+- `DriveCk-cli-macos-arm64-v0.1.0.zip`
+- `DriveCk-gui-macos-arm64-v0.1.0.zip`
 
 Pass `--snapshot` to append `+<shortsha>` from a clean checkout or
 `+<shortsha>.dirty` from a dirty checkout.
 
 Packaging also standardizes staged product names:
 
-- CLI packages expose `driveck`
-- GTK packages expose `driveck` plus `resources/icon/linux/`
-- Win32 packages expose `DriveCk.exe`
-- macOS app packages expose `DriveCk.app` plus the `driveck` helper
+- CLI packages expose `driveck` on Unix-like hosts and `driveck.exe` on Windows
+- Linux GUI packages expose `driveck` plus `resources/icon/linux/`
+- Windows GUI packages expose `DriveCk.exe`
+- macOS GUI packages expose `DriveCk.app` plus the `driveck` helper
 
 ## Running locally
 
