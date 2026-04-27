@@ -46,7 +46,7 @@ mod app {
     const APP_ID: &str = "com.github.driveck";
     const APP_VERSION: &str = concat!("v", env!("CARGO_PKG_VERSION"));
     const PROJECT_URL: &str = "https://github.com/OJZen/DriveCk";
-    const ICON_SEARCH_ROOT: &str = "icon/linux";
+    const ICON_SEARCH_ROOT: &str = "resources/icon/linux";
     const RESOURCE_BASE_PATH: &str = "/com/github/driveck";
     const ICON_RESOURCE_PATH: &str = "/com/github/driveck/icons";
     const APP_CSS: &str = r#"

@@ -15,6 +15,7 @@ are intentionally kept out of the main README.
 | `macos/DriveCkMacCLI` | Native macOS CLI target |
 | `macos/DriveCkMacApp` | Native macOS app target |
 | `macos/DriveCkMac.xcodeproj` | Xcode project for the macOS native frontends |
+| `resources/` | Shared screenshots and application assets |
 | `script/` | Local build, run, verification, and packaging helpers |
 
 ## Unified build entrypoint
@@ -111,7 +112,7 @@ Pass `--snapshot` to append `+<shortsha>` from a clean checkout or
 Packaging also standardizes staged product names:
 
 - CLI packages expose `driveck`
-- GTK packages expose `driveck` plus `icon/linux/`
+- GTK packages expose `driveck` plus `resources/icon/linux/`
 - Win32 packages expose `DriveCk.exe`
 - macOS app packages expose `DriveCk.app` plus the `driveck` helper
 

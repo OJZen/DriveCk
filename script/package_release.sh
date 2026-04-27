@@ -174,8 +174,8 @@ copy_into_stage "$BUILT_BINARY_PATH" "$STAGE_DIR/$STAGED_BINARY_NAME"
 
 case "$TARGET" in
   gtk)
-    mkdir -p "$STAGE_DIR/icon"
-    copy_into_stage "$ROOT_DIR/icon/linux" "$STAGE_DIR/icon/linux"
+    mkdir -p "$STAGE_DIR/resources/icon"
+    copy_into_stage "$ROOT_DIR/resources/icon/linux" "$STAGE_DIR/resources/icon/linux"
     ;;
   macos-app)
     copy_into_stage "$ROOT_DIR/macos/Build/Release/$MACOS_CLI_NAME" "$STAGE_DIR/$MACOS_CLI_NAME"
