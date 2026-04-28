@@ -1190,8 +1190,24 @@ mod app {
                     device_path: device_path.clone(),
                 })
             }
-            Some(_) => Ok(LaunchMode::Cli),
-            None => Ok(LaunchMode::App),
+            _ => {
+                let cli_args = args
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, arg)| {
+                        if index != 0 && arg == "--gui" {
+                            None
+                        } else {
+                            Some(arg.clone())
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                if cli_args.len() > 1 {
+                    Ok(LaunchMode::Cli)
+                } else {
+                    Ok(LaunchMode::App)
+                }
+            }
         }
     }
 
@@ -1795,23 +1811,46 @@ mod app {
                 LaunchMode::Cli
             ));
         }
+
+        #[test]
+        fn launch_mode_honors_gui_flag() {
+            let args = vec!["driveck".to_string(), "--gui".to_string()];
+            assert!(matches!(
+                parse_launch_mode(&args).expect("mode should parse"),
+                LaunchMode::App
+            ));
+        }
     }
 }
 
 #[cfg(target_os = "linux")]
-fn main() {
+fn main() -> std::process::ExitCode {
     let args = std::env::args().collect::<Vec<_>>();
     match app::parse_launch_mode(&args) {
-        Ok(app::LaunchMode::App) => app::run(),
+        Ok(app::LaunchMode::App) => {
+            app::run();
+            std::process::ExitCode::SUCCESS
+        }
         Ok(app::LaunchMode::Cli) => {
-            std::process::exit(driveck_cli::run_with_args_handled(&args));
+            let cli_args = args
+                .iter()
+                .enumerate()
+                .filter_map(|(index, arg)| {
+                    if index != 0 && arg == "--gui" {
+                        None
+                    } else {
+                        Some(arg.clone())
+                    }
+                })
+                .collect::<Vec<_>>();
+            driveck_cli::run_with_args(&cli_args)
         }
         Ok(app::LaunchMode::ValidateHelper { device_path }) => {
-            std::process::exit(app::run_validate_helper(&device_path));
+            std::process::ExitCode::from(app::run_validate_helper(&device_path) as u8)
         }
         Err(error) => {
             eprintln!("{error}");
-            std::process::exit(2);
+            std::process::ExitCode::from(2)
         }
     }
 }
