@@ -1,0 +1,114 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  linux-rust:
+    name: Linux Rust checks
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            gcc-mingw-w64-x86-64 \
+            libgtk-4-dev \
+            pkg-config
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component rustfmt --component clippy
+          rustup default stable
+          rustup target add x86_64-pc-windows-gnu
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Check workspace
+        run: cargo check --workspace --all-targets
+
+      - name: Test workspace
+        run: cargo test --workspace --all-targets
+
+      - name: Run clippy
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Check Windows GNU target
+        run: cargo check --target x86_64-pc-windows-gnu -p driveck-core -p driveck-win32
+
+      - name: Run clippy on Windows GNU target
+        run: cargo clippy --target x86_64-pc-windows-gnu -p driveck-core -p driveck-win32 -- -D warnings
+
+  windows-msvc:
+    name: Windows MSVC build
+    runs-on: windows-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup default stable
+
+      - name: Check native Windows crates
+        run: cargo check -p driveck-core -p driveck-cli -p driveck-ffi -p driveck-win32 --all-targets
+
+      - name: Test native Windows crates
+        run: cargo test -p driveck-core -p driveck-cli -p driveck-ffi -p driveck-win32 --all-targets
+
+      - name: Run clippy on native Windows crates
+        run: cargo clippy -p driveck-core -p driveck-cli -p driveck-ffi -p driveck-win32 --all-targets -- -D warnings
+
+      - name: Build Win32 release binary
+        run: cargo build --release -p driveck-win32
+
+  macos-native:
+    name: macOS native build
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Test Rust crates on macOS
+        run: cargo test --workspace --all-targets
+
+      - name: Build macOS CLI
+        run: |
+          xcodebuild \
+            -project macos/DriveCkMac.xcodeproj \
+            -scheme DriveCkMacCLI \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Build macOS app
+        run: |
+          xcodebuild \
+            -project macos/DriveCkMac.xcodeproj \
+            -scheme DriveCkMacApp \
+            -configuration Debug \
+            CODE_SIGNING_ALLOWED=NO \
+            build

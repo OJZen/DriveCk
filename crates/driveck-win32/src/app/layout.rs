@@ -354,8 +354,10 @@ pub(crate) fn split_four(rect: RECT, gap: i32) -> [RECT; 4] {
 }
 
 pub(crate) unsafe fn load_system_ui_font() -> (HGDIOBJ, bool) {
-    let mut metrics = NONCLIENTMETRICSW::default();
-    metrics.cbSize = size_of::<NONCLIENTMETRICSW>() as u32;
+    let mut metrics = NONCLIENTMETRICSW {
+        cbSize: size_of::<NONCLIENTMETRICSW>() as u32,
+        ..Default::default()
+    };
     if SystemParametersInfoW(
         SPI_GETNONCLIENTMETRICS,
         metrics.cbSize,

@@ -732,10 +732,7 @@ unsafe fn create_state(hwnd: HWND) {
         "COMBOBOX",
         "",
         hwnd,
-        0,
-        0,
-        0,
-        0,
+        make_rect(0, 0, 0, 0),
         IDC_DEVICE_COMBO,
         ws(CBS_DROPDOWNLIST) | WS_TABSTOP | WS_VSCROLL,
     );
@@ -743,10 +740,7 @@ unsafe fn create_state(hwnd: HWND) {
         "COMBOBOX",
         "",
         hwnd,
-        0,
-        0,
-        0,
-        0,
+        make_rect(0, 0, 0, 0),
         IDC_LANGUAGE_COMBO,
         ws(CBS_DROPDOWNLIST) | WS_TABSTOP | WS_VSCROLL,
     );
@@ -754,10 +748,7 @@ unsafe fn create_state(hwnd: HWND) {
         "BUTTON",
         refresh_button_text(language),
         hwnd,
-        0,
-        0,
-        0,
-        0,
+        make_rect(0, 0, 0, 0),
         IDC_REFRESH,
         ws(BS_PUSHBUTTON),
     );
@@ -765,10 +756,7 @@ unsafe fn create_state(hwnd: HWND) {
         "BUTTON",
         validate_button_text(language),
         hwnd,
-        0,
-        0,
-        0,
-        0,
+        make_rect(0, 0, 0, 0),
         IDC_VALIDATE,
         ws(BS_PUSHBUTTON),
     );
@@ -776,10 +764,7 @@ unsafe fn create_state(hwnd: HWND) {
         "BUTTON",
         stop_button_text(language),
         hwnd,
-        0,
-        0,
-        0,
-        0,
+        make_rect(0, 0, 0, 0),
         IDC_STOP,
         ws(BS_PUSHBUTTON),
     );
@@ -787,10 +772,7 @@ unsafe fn create_state(hwnd: HWND) {
         "BUTTON",
         save_report_button_text(language),
         hwnd,
-        0,
-        0,
-        0,
-        0,
+        make_rect(0, 0, 0, 0),
         IDC_SAVE,
         ws(BS_PUSHBUTTON),
     );
@@ -798,10 +780,7 @@ unsafe fn create_state(hwnd: HWND) {
         "BUTTON",
         open_report_button_text(language),
         hwnd,
-        0,
-        0,
-        0,
-        0,
+        make_rect(0, 0, 0, 0),
         IDC_OPEN_REPORT,
         ws(BS_PUSHBUTTON),
     );
@@ -809,10 +788,7 @@ unsafe fn create_state(hwnd: HWND) {
         "SCROLLBAR",
         "",
         hwnd,
-        0,
-        0,
-        0,
-        0,
+        make_rect(0, 0, 0, 0),
         IDC_REPORT_SCROLL,
         ws(SBS_VERT),
     );
@@ -820,10 +796,7 @@ unsafe fn create_state(hwnd: HWND) {
         "BUTTON",
         about_button_text(language),
         hwnd,
-        0,
-        0,
-        0,
-        0,
+        make_rect(0, 0, 0, 0),
         IDC_ABOUT,
         ws(BS_PUSHBUTTON),
     );
@@ -831,10 +804,7 @@ unsafe fn create_state(hwnd: HWND) {
         "msctls_progress32",
         "",
         hwnd,
-        0,
-        0,
-        0,
-        0,
+        make_rect(0, 0, 0, 0),
         IDC_PROGRESS,
         WINDOW_STYLE(0),
     );
@@ -1462,13 +1432,15 @@ unsafe fn sync_report_scrollbar(state: &mut AppState) {
     let max_offset = (content_height - viewport_height).max(0);
     state.report_scroll_offset = state.report_scroll_offset.clamp(0, max_offset);
 
-    let mut info = SCROLLINFO::default();
-    info.cbSize = size_of::<SCROLLINFO>() as u32;
-    info.fMask = SIF_RANGE | SIF_PAGE | SIF_POS;
-    info.nMin = 0;
-    info.nMax = content_height.saturating_sub(1);
-    info.nPage = viewport_height.max(1) as u32;
-    info.nPos = state.report_scroll_offset;
+    let info = SCROLLINFO {
+        cbSize: size_of::<SCROLLINFO>() as u32,
+        fMask: SIF_RANGE | SIF_PAGE | SIF_POS,
+        nMin: 0,
+        nMax: content_height.saturating_sub(1),
+        nPage: viewport_height.max(1) as u32,
+        nPos: state.report_scroll_offset,
+        ..Default::default()
+    };
     let _ = send_message(
         state.report_scrollbar,
         SBM_SETSCROLLINFO,
@@ -1486,9 +1458,11 @@ unsafe fn handle_report_scroll(state: &mut AppState, wparam: WPARAM, lparam: LPA
         return false;
     }
 
-    let mut info = SCROLLINFO::default();
-    info.cbSize = size_of::<SCROLLINFO>() as u32;
-    info.fMask = SIF_ALL;
+    let mut info = SCROLLINFO {
+        cbSize: size_of::<SCROLLINFO>() as u32,
+        fMask: SIF_ALL,
+        ..Default::default()
+    };
     let _ = GetScrollInfo(state.report_scrollbar, SB_CTL, &mut info);
 
     let code = (wparam.0 & 0xffff) as i32;
@@ -1532,9 +1506,11 @@ unsafe fn handle_report_mouse_wheel(state: &mut AppState, wparam: WPARAM, lparam
         return false;
     }
 
-    let mut info = SCROLLINFO::default();
-    info.cbSize = size_of::<SCROLLINFO>() as u32;
-    info.fMask = SIF_ALL;
+    let mut info = SCROLLINFO {
+        cbSize: size_of::<SCROLLINFO>() as u32,
+        fMask: SIF_ALL,
+        ..Default::default()
+    };
     let _ = GetScrollInfo(state.report_scrollbar, SB_CTL, &mut info);
 
     let wheel_delta = (((wparam.0 >> 16) & 0xffff) as i16) as i32;
@@ -1568,13 +1544,15 @@ unsafe fn pick_save_path() -> Option<String> {
         .collect();
     let def_ext = wide("txt");
 
-    let mut ofn = OPENFILENAMEW::default();
-    ofn.lStructSize = size_of::<OPENFILENAMEW>() as u32;
-    ofn.lpstrFile = PWSTR(buffer.as_mut_ptr());
-    ofn.nMaxFile = buffer.len() as u32;
-    ofn.lpstrFilter = PCWSTR(filter.as_ptr());
-    ofn.lpstrDefExt = PCWSTR(def_ext.as_ptr());
-    ofn.Flags = OFN_EXPLORER | OFN_OVERWRITEPROMPT;
+    let mut ofn = OPENFILENAMEW {
+        lStructSize: size_of::<OPENFILENAMEW>() as u32,
+        lpstrFile: PWSTR(buffer.as_mut_ptr()),
+        nMaxFile: buffer.len() as u32,
+        lpstrFilter: PCWSTR(filter.as_ptr()),
+        lpstrDefExt: PCWSTR(def_ext.as_ptr()),
+        Flags: OFN_EXPLORER | OFN_OVERWRITEPROMPT,
+        ..Default::default()
+    };
 
     if !GetSaveFileNameW(&mut ofn).as_bool() {
         return None;
@@ -3990,10 +3968,7 @@ unsafe fn create_control(
     class_name: &str,
     text: &str,
     parent: HWND,
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
+    bounds: RECT,
     id: i32,
     extra_style: WINDOW_STYLE,
 ) -> HWND {
@@ -4001,10 +3976,7 @@ unsafe fn create_control(
         class_name,
         text,
         parent,
-        x,
-        y,
-        width,
-        height,
+        bounds,
         id,
         extra_style,
         Default::default(),
@@ -4015,10 +3987,7 @@ unsafe fn create_control_ex(
     class_name: &str,
     text: &str,
     parent: HWND,
-    x: i32,
-    y: i32,
-    width: i32,
-    height: i32,
+    bounds: RECT,
     id: i32,
     extra_style: WINDOW_STYLE,
     ex_style: WINDOW_EX_STYLE,
@@ -4030,10 +3999,10 @@ unsafe fn create_control_ex(
         PCWSTR(class_name.as_ptr()),
         PCWSTR(text.as_ptr()),
         WS_CHILD | WS_VISIBLE | extra_style,
-        x,
-        y,
-        width,
-        height,
+        bounds.left,
+        bounds.top,
+        rect_width(bounds),
+        rect_height(bounds),
         Some(parent),
         Some(control_hmenu(id)),
         Some(HINSTANCE(GetModuleHandleW(None).unwrap().0)),

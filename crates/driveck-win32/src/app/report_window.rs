@@ -34,10 +34,7 @@ pub(super) unsafe extern "system" fn report_window_proc(
                     "EDIT",
                     "",
                     hwnd,
-                    0,
-                    0,
-                    0,
-                    0,
+                    make_rect(0, 0, 0, 0),
                     IDC_REPORT_EDIT,
                     ws(ES_LEFT | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | ES_WANTRETURN)
                         | WS_BORDER
@@ -48,10 +45,7 @@ pub(super) unsafe extern "system" fn report_window_proc(
                     "BUTTON",
                     report_copy_button_text(state.language),
                     hwnd,
-                    0,
-                    0,
-                    0,
-                    0,
+                    make_rect(0, 0, 0, 0),
                     IDC_REPORT_COPY,
                     ws(BS_PUSHBUTTON),
                 );
@@ -59,10 +53,7 @@ pub(super) unsafe extern "system" fn report_window_proc(
                     "BUTTON",
                     report_save_button_text(state.language),
                     hwnd,
-                    0,
-                    0,
-                    0,
-                    0,
+                    make_rect(0, 0, 0, 0),
                     IDC_REPORT_SAVE,
                     ws(BS_PUSHBUTTON),
                 );
@@ -70,10 +61,7 @@ pub(super) unsafe extern "system" fn report_window_proc(
                     "BUTTON",
                     close_button_text(state.language),
                     hwnd,
-                    0,
-                    0,
-                    0,
-                    0,
+                    make_rect(0, 0, 0, 0),
                     IDC_REPORT_CLOSE,
                     ws(BS_PUSHBUTTON),
                 );

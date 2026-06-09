@@ -28,10 +28,7 @@ pub(super) unsafe extern "system" fn about_window_proc(
                     "BUTTON",
                     open_github_button_text(state.language),
                     hwnd,
-                    0,
-                    0,
-                    0,
-                    0,
+                    make_rect(0, 0, 0, 0),
                     IDC_ABOUT_OPEN_GITHUB,
                     ws(BS_PUSHBUTTON),
                 );
@@ -39,10 +36,7 @@ pub(super) unsafe extern "system" fn about_window_proc(
                     "BUTTON",
                     close_button_text(state.language),
                     hwnd,
-                    0,
-                    0,
-                    0,
-                    0,
+                    make_rect(0, 0, 0, 0),
                     IDC_ABOUT_CLOSE,
                     ws(BS_PUSHBUTTON),
                 );
