@@ -497,13 +497,17 @@ README 需要新增：
 
 ## 13.1 权限
 
-macOS 原始磁盘访问可能需要更高权限。本次不实现特权 helper，采用：
+macOS 原始磁盘访问可能需要更高权限。当前实现采用随 app 打包的原生 CLI
+helper 执行高权限校验流程：
 
-- 明确错误提示
-- README 说明
-- CLI 优先满足高权限场景
+- GUI 通过 Authorization Services 请求管理员授权后启动 CLI helper
+- helper 在受限临时 IPC 目录中接收请求、写入进度和返回结果
+- helper 启动后重新发现并匹配目标磁盘，避免授权前后设备替换
+- 目标磁盘在校验前通过 `diskutil unmountDisk` 卸载
 
-GUI 在权限不足时展示清晰引导，而不是假装成功。
+这不是长期驻留的 privileged daemon，也不是 SMJobBless 安装型 helper。后续若要
+发布到更严格的 macOS 分发渠道，应重新评估 `AuthorizationExecuteWithPrivileges`
+的兼容性，并考虑迁移到更现代的特权服务方案。
 
 ## 13.2 构建环境
 
