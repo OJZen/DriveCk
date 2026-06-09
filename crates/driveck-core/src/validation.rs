@@ -132,6 +132,15 @@ pub fn validate_target_with_callbacks(
             None,
         ));
     }
+    if !target.is_usb && !target.is_removable {
+        return Err(ValidationFailure::new(
+            format!(
+                "Refusing to validate {} because it is not reported as a USB or removable whole-disk device.",
+                target.path
+            ),
+            None,
+        ));
+    }
 
     let mut report = ValidationReport::default();
     report.started_at = current_timestamp();
@@ -642,6 +651,25 @@ mod tests {
         let error = validate_target(&target, &ValidationOptions::default())
             .expect_err("mounted targets must be rejected");
         assert!(error.message.contains("mounted"));
+    }
+
+    #[test]
+    fn fixed_internal_targets_are_rejected_before_opening() {
+        let target = TargetInfo {
+            path: "/path/that/should/not/be/opened".into(),
+            name: "disk0".into(),
+            size_bytes: DRIVECK_MIN_REGION_SIZE * DRIVECK_SAMPLE_COUNT as u64,
+            logical_block_size: DRIVECK_MIN_REGION_SIZE as u32,
+            is_block_device: true,
+            is_mounted: false,
+            is_usb: false,
+            is_removable: false,
+            ..TargetInfo::default()
+        };
+
+        let error = validate_target(&target, &ValidationOptions::default())
+            .expect_err("fixed internal targets must be rejected");
+        assert!(error.message.contains("USB or removable"));
     }
 
     #[test]

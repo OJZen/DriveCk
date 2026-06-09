@@ -5,8 +5,8 @@ use std::{
 };
 
 use driveck_core::{
-    ProgressUpdate, TargetInfo, ValidationOptions, collect_targets, discover_target, format_bytes,
-    format_report_text, report_has_failures, save_report, validate_target_with_callbacks,
+    collect_targets, discover_target, format_bytes, format_report_text, report_has_failures,
+    save_report, validate_target_with_callbacks, ProgressUpdate, TargetInfo, ValidationOptions,
 };
 
 #[derive(Default)]
@@ -57,6 +57,7 @@ fn run(args: &[String], supports_gui: bool) -> Result<ExitCode, String> {
         .as_deref()
         .ok_or_else(|| "A device path is required unless --list is used.".to_string())?;
     let target = discover_target(target_path).map_err(|error| error.message)?;
+    confirm_supported_target(&target)?;
     confirm_block_device(&target, options.assume_yes)?;
 
     let show_progress = io::stderr().is_terminal();
@@ -203,6 +204,17 @@ fn confirm_block_device(target: &TargetInfo, assume_yes: bool) -> Result<(), Str
     }
 }
 
+fn confirm_supported_target(target: &TargetInfo) -> Result<(), String> {
+    if target.is_usb || target.is_removable {
+        return Ok(());
+    }
+
+    Err(format!(
+        "Refusing to validate {} because it is not reported as a USB or removable whole-disk device.",
+        target.path
+    ))
+}
+
 fn print_targets(targets: &[TargetInfo]) {
     println!(
         "{:<16} {:<12} {:<10} {:<10} MODEL",
@@ -265,4 +277,41 @@ fn print_usage(program: &str, supports_gui: bool) {
         "Usage:\n  {0} --list\n  {0} [--yes] [--seed N] [--output FILE] DEVICE\n\nExamples:\n  {0} --list\n  {0} --yes {1}\n  {0} --yes --output report.txt {1}{2}\n\nOptions:\n  -l, --list          List removable/USB whole-disk targets.\n  -o, --output FILE   Write the text report to FILE in addition to stdout.\n  -y, --yes           Skip the destructive-operation confirmation prompt.\n      --seed N        Use a fixed 64-bit seed for deterministic sample data.{3}\n  -h, --help          Show this help text.",
         program, example_device, gui_example, gui_option
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::confirm_supported_target;
+    use driveck_core::TargetInfo;
+
+    #[test]
+    fn rejects_non_usb_non_removable_targets() {
+        let target = TargetInfo {
+            path: "/dev/nvme0n1".into(),
+            is_usb: false,
+            is_removable: false,
+            ..TargetInfo::default()
+        };
+
+        let error = confirm_supported_target(&target)
+            .expect_err("fixed internal disks should not pass CLI preflight");
+        assert!(error.contains("USB or removable"));
+    }
+
+    #[test]
+    fn accepts_usb_or_removable_targets() {
+        let usb = TargetInfo {
+            path: "/dev/sdb".into(),
+            is_usb: true,
+            ..TargetInfo::default()
+        };
+        let removable = TargetInfo {
+            path: "/dev/mmcblk0".into(),
+            is_removable: true,
+            ..TargetInfo::default()
+        };
+
+        confirm_supported_target(&usb).expect("USB targets should pass CLI preflight");
+        confirm_supported_target(&removable).expect("removable targets should pass CLI preflight");
+    }
 }
