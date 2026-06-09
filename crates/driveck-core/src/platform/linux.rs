@@ -22,16 +22,13 @@ impl OpenedTarget {
         options.read(true).write(true).custom_flags(libc::O_CLOEXEC);
 
         if target.is_block_device {
-            options.custom_flags(libc::O_CLOEXEC | libc::O_DIRECT | libc::O_SYNC);
-            let file = options.open(&target.path).map_err(|error| {
-                DriveCkError::io(
-                    format!(
-                        "Failed to open {} with direct block-device I/O",
-                        target.path
-                    ),
-                    error,
-                )
-            })?;
+            let device_name = device_name_for_target(target)?;
+            ensure_unmounted(&device_name, &target.path)?;
+            options.custom_flags(libc::O_CLOEXEC | libc::O_DIRECT | libc::O_SYNC | libc::O_EXCL);
+            let file = options
+                .open(&target.path)
+                .map_err(|error| map_block_open_error(&target.path, error))?;
+            ensure_unmounted(&device_name, &target.path)?;
             return Ok(Self {
                 file,
                 direct_io_used: true,
@@ -99,6 +96,43 @@ impl OpenedTarget {
                 libc::POSIX_FADV_DONTNEED,
             );
         }
+    }
+}
+
+fn device_name_for_target(target: &TargetInfo) -> Result<String, DriveCkError> {
+    if !target.name.is_empty() {
+        return Ok(target.name.clone());
+    }
+
+    basename(Path::new(&target.path)).ok_or_else(|| {
+        DriveCkError::new(format!(
+            "Cannot determine the device name for {}.",
+            target.path
+        ))
+    })
+}
+
+fn ensure_unmounted(device_name: &str, path: &str) -> Result<(), DriveCkError> {
+    if is_block_device_mounted(device_name) {
+        return Err(DriveCkError::new(format!(
+            "Refusing to validate {} because the disk or one of its partitions is mounted.",
+            path
+        )));
+    }
+
+    Ok(())
+}
+
+fn map_block_open_error(path: &str, error: io::Error) -> DriveCkError {
+    match error.raw_os_error() {
+        Some(code) if code == libc::EBUSY => DriveCkError::new(format!(
+            "Refusing to validate {} because the disk is busy or mounted.",
+            path
+        )),
+        _ => DriveCkError::io(
+            format!("Failed to open {path} with direct block-device I/O"),
+            error,
+        ),
     }
 }
 
