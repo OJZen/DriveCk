@@ -1,5 +1,5 @@
 use std::{
-    alloc::{alloc_zeroed, dealloc, Layout},
+    alloc::{Layout, alloc_zeroed, dealloc},
     fmt,
     mem::size_of,
     ptr::NonNull,
@@ -7,9 +7,9 @@ use std::{
 };
 
 use crate::{
-    format_bytes, platform::OpenedTarget, CancelObserver, ProgressObserver, ProgressUpdate,
-    SampleStatus, TargetInfo, TimingSeries, ValidationOptions, ValidationReport,
-    DRIVECK_MIN_REGION_SIZE, DRIVECK_SAMPLE_COUNT,
+    CancelObserver, DRIVECK_MIN_REGION_SIZE, DRIVECK_SAMPLE_COUNT, ProgressObserver,
+    ProgressUpdate, SampleStatus, TargetInfo, TimingSeries, ValidationOptions, ValidationReport,
+    format_bytes, platform::OpenedTarget,
 };
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -593,12 +593,12 @@ fn count_status(report: &mut ValidationReport, status: SampleStatus) {
 #[cfg(test)]
 mod tests {
     use crate::{
-        validate_target, SampleStatus, ValidationOptions, ValidationReport,
-        DRIVECK_MIN_REGION_SIZE, DRIVECK_SAMPLE_COUNT,
+        DRIVECK_MIN_REGION_SIZE, DRIVECK_SAMPLE_COUNT, SampleStatus, ValidationOptions,
+        ValidationReport, validate_target,
     };
 
     use super::{
-        build_sample_order, default_region_size, effective_direct_io, finalize_extents, TargetInfo,
+        TargetInfo, build_sample_order, default_region_size, effective_direct_io, finalize_extents,
     };
 
     #[test]

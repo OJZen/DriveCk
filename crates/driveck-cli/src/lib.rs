@@ -5,8 +5,8 @@ use std::{
 };
 
 use driveck_core::{
-    collect_targets, discover_target, format_bytes, format_report_text, report_has_failures,
-    save_report, validate_target_with_callbacks, ProgressUpdate, TargetInfo, ValidationOptions,
+    ProgressUpdate, TargetInfo, ValidationOptions, collect_targets, discover_target, format_bytes,
+    format_report_text, report_has_failures, save_report, validate_target_with_callbacks,
 };
 
 #[derive(Default)]

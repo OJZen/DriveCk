@@ -14,31 +14,30 @@ use std::{
 };
 
 use windows::{
-    core::PCWSTR,
     Win32::{
         Foundation::{
-            CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_MORE_DATA, ERROR_NOT_READY,
-            ERROR_NO_MORE_FILES, HANDLE, INVALID_HANDLE_VALUE,
+            CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_MORE_DATA, ERROR_NO_MORE_FILES,
+            ERROR_NOT_READY, HANDLE, INVALID_HANDLE_VALUE,
         },
         Storage::FileSystem::{
             BusTypeAta as BUS_TYPE_ATA, BusTypeNvme as BUS_TYPE_NVME, BusTypeSata as BUS_TYPE_SATA,
             BusTypeScsi as BUS_TYPE_SCSI, BusTypeSd as BUS_TYPE_SD, BusTypeUsb as BUS_TYPE_USB,
-            CreateFileW, FindFirstVolumeW, FindNextVolumeW, FindVolumeClose, FILE_ATTRIBUTE_NORMAL,
-            FILE_FLAG_NO_BUFFERING, FILE_FLAG_WRITE_THROUGH, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
-            FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
+            CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_NO_BUFFERING, FILE_FLAG_WRITE_THROUGH,
+            FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_DELETE, FILE_SHARE_READ,
+            FILE_SHARE_WRITE, FindFirstVolumeW, FindNextVolumeW, FindVolumeClose,
             IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, OPEN_EXISTING,
         },
         System::{
-            Ioctl::{
-                PropertyStandardQuery, StorageDeviceProperty, DISK_EXTENT, DISK_GEOMETRY_EX,
-                FSCTL_DISMOUNT_VOLUME, FSCTL_IS_VOLUME_MOUNTED, FSCTL_LOCK_VOLUME,
-                IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, IOCTL_STORAGE_QUERY_PROPERTY,
-                STORAGE_DEVICE_DESCRIPTOR, STORAGE_PROPERTY_QUERY, STORAGE_QUERY_TYPE,
-                VOLUME_DISK_EXTENTS,
-            },
             IO::DeviceIoControl,
+            Ioctl::{
+                DISK_EXTENT, DISK_GEOMETRY_EX, FSCTL_DISMOUNT_VOLUME, FSCTL_IS_VOLUME_MOUNTED,
+                FSCTL_LOCK_VOLUME, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, IOCTL_STORAGE_QUERY_PROPERTY,
+                PropertyStandardQuery, STORAGE_DEVICE_DESCRIPTOR, STORAGE_PROPERTY_QUERY,
+                STORAGE_QUERY_TYPE, StorageDeviceProperty, VOLUME_DISK_EXTENTS,
+            },
         },
     },
+    core::PCWSTR,
 };
 
 use crate::{DriveCkError, TargetInfo, TargetKind};

@@ -1,12 +1,12 @@
 use std::{fmt::Write as _, fs, path::Path};
 
 use crate::{
-    format_bytes, format_local_timestamp,
+    DriveCkError, format_bytes, format_local_timestamp,
     model::{
-        TargetInfo, TimingSeries, TimingSummary, ValidationReport, DRIVECK_MAP_COLUMNS,
-        DRIVECK_MAP_ROWS, DRIVECK_SAMPLE_COUNT,
+        DRIVECK_MAP_COLUMNS, DRIVECK_MAP_ROWS, DRIVECK_SAMPLE_COUNT, TargetInfo, TimingSeries,
+        TimingSummary, ValidationReport,
     },
-    report_verdict, sample_status_glyph, sample_status_name, DriveCkError,
+    report_verdict, sample_status_glyph, sample_status_name,
 };
 
 pub fn summarize_timings(series: &TimingSeries, region_size_bytes: u64) -> TimingSummary {
@@ -303,8 +303,8 @@ pub fn save_report(
 #[cfg(test)]
 mod tests {
     use crate::{
-        SampleStatus, TargetInfo, TargetKind, ValidationReport, DRIVECK_MAP_COLUMNS,
-        DRIVECK_SAMPLE_COUNT,
+        DRIVECK_MAP_COLUMNS, DRIVECK_SAMPLE_COUNT, SampleStatus, TargetInfo, TargetKind,
+        ValidationReport,
     };
 
     #[test]
