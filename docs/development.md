@@ -65,8 +65,8 @@ Use the shared verification script:
 It runs:
 
 - `cargo test --workspace`
-- the macOS CLI build
-- the macOS app build
+- the macOS CLI build when running on macOS with `xcodebuild`
+- the macOS app build when running on macOS with `xcodebuild`
 - the Windows GNU cross-check when `x86_64-pc-windows-gnu` is installed
 
 ## Packaging
