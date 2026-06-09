@@ -7,8 +7,9 @@ pub const DRIVECK_MIN_REGION_SIZE: u64 = 4096;
 pub const DRIVECK_MAX_REGION_SIZE: u64 = 8 * 1024 * 1024;
 pub const DRIVECK_TIMING_CAPACITY: usize = DRIVECK_SAMPLE_COUNT * 2;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum TargetKind {
+    #[default]
     BlockDevice,
 }
 
@@ -165,11 +166,5 @@ where
 {
     fn is_cancelled(&self) -> bool {
         self()
-    }
-}
-
-impl Default for TargetKind {
-    fn default() -> Self {
-        Self::BlockDevice
     }
 }

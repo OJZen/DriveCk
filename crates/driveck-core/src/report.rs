@@ -28,7 +28,7 @@ pub fn summarize_timings(series: &TimingSeries, region_size_bytes: u64) -> Timin
 
     let mut sorted = series.values.clone();
     sorted.sort_by(|left, right| left.total_cmp(right));
-    summary.median_ms = if sorted.len() % 2 == 0 {
+    summary.median_ms = if sorted.len().is_multiple_of(2) {
         let middle = sorted.len() / 2;
         (sorted[middle - 1] + sorted[middle]) / 2.0
     } else {
