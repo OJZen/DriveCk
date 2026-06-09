@@ -12,8 +12,32 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
+  linux-msrv:
+    name: Linux MSRV check
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-4-dev \
+            pkg-config
+
+      - name: Install Rust 1.87
+        run: |
+          rustup toolchain install 1.87.0 --profile minimal
+          rustup default 1.87.0
+
+      - name: Check workspace on MSRV
+        run: cargo check --workspace --all-targets
+
   linux-rust:
     name: Linux Rust checks
     runs-on: ubuntu-latest
