@@ -1622,13 +1622,13 @@ unsafe fn apply_window_icon(hwnd: HWND) {
 
 unsafe fn load_app_icon() -> Option<HICON> {
     let hinstance = HINSTANCE(GetModuleHandleW(None).unwrap().0);
-    let resource_id = PCWSTR(1 as *const u16);
+    let resource_id = int_resource(1);
     LoadIconW(Some(hinstance), resource_id).ok()
 }
 
 unsafe fn load_app_icon_sized(size: i32) -> Option<HICON> {
     let hinstance = HINSTANCE(GetModuleHandleW(None).unwrap().0);
-    let resource_id = PCWSTR(1 as *const u16);
+    let resource_id = int_resource(1);
     LoadImageW(
         Some(hinstance),
         resource_id,
@@ -1639,6 +1639,11 @@ unsafe fn load_app_icon_sized(size: i32) -> Option<HICON> {
     )
     .ok()
     .map(|handle| HICON(handle.0))
+}
+
+#[allow(clippy::manual_dangling_ptr)]
+fn int_resource(id: u16) -> PCWSTR {
+    PCWSTR(id as usize as *const u16)
 }
 
 unsafe fn paint_window(hwnd: HWND, state: &AppState) {
@@ -3484,11 +3489,11 @@ fn processed_regions_text(language: Language, current: usize, total: usize) -> S
 }
 
 fn progress_basis_points(current: usize, total: usize) -> u32 {
-    if total == 0 {
-        0
-    } else {
-        ((current.min(total) * 1000) / total) as u32
-    }
+    current
+        .min(total)
+        .saturating_mul(1000)
+        .checked_div(total)
+        .unwrap_or(0) as u32
 }
 
 fn progress_percent_text(current: usize, total: usize) -> String {
