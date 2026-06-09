@@ -9,34 +9,36 @@ use std::{
         io::{FromRawHandle, OwnedHandle},
     },
     path::{Path, PathBuf},
+    ptr,
     sync::{Mutex, OnceLock},
 };
 
 use windows::{
+    core::PCWSTR,
     Win32::{
         Foundation::{
-            CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_MORE_DATA, ERROR_NO_MORE_FILES,
-            ERROR_NOT_READY, HANDLE, INVALID_HANDLE_VALUE,
+            CloseHandle, ERROR_INSUFFICIENT_BUFFER, ERROR_MORE_DATA, ERROR_NOT_READY,
+            ERROR_NO_MORE_FILES, HANDLE, INVALID_HANDLE_VALUE,
         },
         Storage::FileSystem::{
             BusTypeAta as BUS_TYPE_ATA, BusTypeNvme as BUS_TYPE_NVME, BusTypeSata as BUS_TYPE_SATA,
             BusTypeScsi as BUS_TYPE_SCSI, BusTypeSd as BUS_TYPE_SD, BusTypeUsb as BUS_TYPE_USB,
-            CreateFileW, FILE_ATTRIBUTE_NORMAL, FILE_FLAG_NO_BUFFERING, FILE_FLAG_WRITE_THROUGH,
-            FILE_GENERIC_READ, FILE_GENERIC_WRITE, FILE_SHARE_DELETE, FILE_SHARE_READ,
-            FILE_SHARE_WRITE, FindFirstVolumeW, FindNextVolumeW, FindVolumeClose,
+            CreateFileW, FindFirstVolumeW, FindNextVolumeW, FindVolumeClose, FILE_ATTRIBUTE_NORMAL,
+            FILE_FLAG_NO_BUFFERING, FILE_FLAG_WRITE_THROUGH, FILE_GENERIC_READ, FILE_GENERIC_WRITE,
+            FILE_SHARE_DELETE, FILE_SHARE_READ, FILE_SHARE_WRITE,
             IOCTL_VOLUME_GET_VOLUME_DISK_EXTENTS, OPEN_EXISTING,
         },
         System::{
-            IO::DeviceIoControl,
             Ioctl::{
-                DISK_EXTENT, DISK_GEOMETRY_EX, FSCTL_DISMOUNT_VOLUME, FSCTL_IS_VOLUME_MOUNTED,
-                FSCTL_LOCK_VOLUME, IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, IOCTL_STORAGE_QUERY_PROPERTY,
-                PropertyStandardQuery, STORAGE_DEVICE_DESCRIPTOR, STORAGE_PROPERTY_QUERY,
-                STORAGE_QUERY_TYPE, StorageDeviceProperty, VOLUME_DISK_EXTENTS,
+                PropertyStandardQuery, StorageDeviceProperty, DISK_EXTENT, DISK_GEOMETRY_EX,
+                FSCTL_DISMOUNT_VOLUME, FSCTL_IS_VOLUME_MOUNTED, FSCTL_LOCK_VOLUME,
+                IOCTL_DISK_GET_DRIVE_GEOMETRY_EX, IOCTL_STORAGE_QUERY_PROPERTY,
+                STORAGE_DEVICE_DESCRIPTOR, STORAGE_PROPERTY_QUERY, STORAGE_QUERY_TYPE,
+                VOLUME_DISK_EXTENTS,
             },
+            IO::DeviceIoControl,
         },
     },
-    core::PCWSTR,
 };
 
 use crate::{DriveCkError, TargetInfo, TargetKind};
@@ -333,7 +335,7 @@ fn query_capacity(handle: HANDLE) -> Option<u64> {
         return None;
     }
 
-    let geometry = unsafe { &*(buffer.as_ptr().cast::<DISK_GEOMETRY_EX>()) };
+    let geometry = unsafe { ptr::read_unaligned(buffer.as_ptr().cast::<DISK_GEOMETRY_EX>()) };
     Some(geometry.DiskSize as u64)
 }
 
@@ -362,7 +364,8 @@ fn query_descriptor(handle: HANDLE) -> Option<DescriptorInfo> {
         return None;
     }
 
-    let descriptor = unsafe { &*(buffer.as_ptr().cast::<STORAGE_DEVICE_DESCRIPTOR>()) };
+    let descriptor =
+        unsafe { ptr::read_unaligned(buffer.as_ptr().cast::<STORAGE_DEVICE_DESCRIPTOR>()) };
     let vendor = read_ansi_field(&buffer, descriptor.VendorIdOffset);
     let model = read_ansi_field(&buffer, descriptor.ProductIdOffset);
     let bus_type = descriptor.BusType;
@@ -412,27 +415,25 @@ fn list_volume_names() -> Result<Vec<String>, DriveCkError> {
     })?;
 
     let mut volumes = Vec::new();
-    let result = (|| {
-        loop {
-            let volume_name = wide_buffer_to_string(&buffer);
-            if !volume_name.is_empty() {
-                volumes.push(volume_name);
-            }
-
-            buffer.fill(0);
-            if unsafe { FindNextVolumeW(handle, &mut buffer) }.is_ok() {
-                continue;
-            }
-
-            let error = io::Error::last_os_error();
-            if error.raw_os_error() == Some(ERROR_NO_MORE_FILES.0 as i32) {
-                return Ok(volumes);
-            }
-            return Err(DriveCkError::io(
-                "Failed to continue Windows volume enumeration",
-                error,
-            ));
+    let result = (|| loop {
+        let volume_name = wide_buffer_to_string(&buffer);
+        if !volume_name.is_empty() {
+            volumes.push(volume_name);
         }
+
+        buffer.fill(0);
+        if unsafe { FindNextVolumeW(handle, &mut buffer) }.is_ok() {
+            continue;
+        }
+
+        let error = io::Error::last_os_error();
+        if error.raw_os_error() == Some(ERROR_NO_MORE_FILES.0 as i32) {
+            return Ok(volumes);
+        }
+        return Err(DriveCkError::io(
+            "Failed to continue Windows volume enumeration",
+            error,
+        ));
     })();
 
     unsafe {
@@ -617,8 +618,9 @@ fn query_volume_disk_numbers(handle: HANDLE) -> Result<Vec<u32>, DriveCkError> {
                 ));
             }
 
-            let extents = unsafe { &*(buffer.as_ptr().cast::<VOLUME_DISK_EXTENTS>()) };
-            let count = extents.NumberOfDiskExtents as usize;
+            let extents_header =
+                unsafe { ptr::read_unaligned(buffer.as_ptr().cast::<VOLUME_DISK_EXTENTS>()) };
+            let count = extents_header.NumberOfDiskExtents as usize;
             let required_len = size_of::<VOLUME_DISK_EXTENTS>()
                 + count.saturating_sub(1) * size_of::<DISK_EXTENT>();
             if (bytes_returned as usize) < required_len {
@@ -627,9 +629,16 @@ fn query_volume_disk_numbers(handle: HANDLE) -> Result<Vec<u32>, DriveCkError> {
                 ));
             }
 
-            let first_extent = std::ptr::addr_of!(extents.Extents).cast::<DISK_EXTENT>();
-            let extents = unsafe { std::slice::from_raw_parts(first_extent, count) };
-            return Ok(extents.iter().map(|extent| extent.DiskNumber).collect());
+            let first_extent_offset = size_of::<VOLUME_DISK_EXTENTS>() - size_of::<DISK_EXTENT>();
+            let mut disk_numbers = Vec::with_capacity(count);
+            for index in 0..count {
+                let offset = first_extent_offset + index * size_of::<DISK_EXTENT>();
+                let extent = unsafe {
+                    ptr::read_unaligned(buffer.as_ptr().add(offset).cast::<DISK_EXTENT>())
+                };
+                disk_numbers.push(extent.DiskNumber);
+            }
+            return Ok(disk_numbers);
         }
 
         let error = io::Error::last_os_error();
