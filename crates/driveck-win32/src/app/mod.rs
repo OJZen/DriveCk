@@ -3963,7 +3963,9 @@ fn take_ffi_string(pointer: *mut c_char) -> Result<String, String> {
         return Err("DriveCk FFI returned a null string pointer.".to_string());
     }
     let bytes = unsafe { CStr::from_ptr(pointer) }.to_bytes().to_vec();
-    driveck_ffi_free_string(pointer);
+    unsafe {
+        driveck_ffi_free_string(pointer);
+    }
     String::from_utf8(bytes)
         .map_err(|_| "DriveCk FFI returned a non-UTF-8 JSON string.".to_string())
 }

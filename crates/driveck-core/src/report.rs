@@ -309,15 +309,17 @@ mod tests {
 
     #[test]
     fn formats_report_map() {
-        let mut report = ValidationReport::default();
-        report.started_at = 1;
-        report.finished_at = 2;
-        report.seed = 3;
-        report.region_size_bytes = 4096;
-        report.reported_size_bytes = 4096 * DRIVECK_SAMPLE_COUNT as u64;
-        report.completed_samples = DRIVECK_SAMPLE_COUNT;
-        report.completed_all_samples = true;
-        report.success_count = DRIVECK_SAMPLE_COUNT;
+        let mut report = ValidationReport {
+            started_at: 1,
+            finished_at: 2,
+            seed: 3,
+            region_size_bytes: 4096,
+            reported_size_bytes: 4096 * DRIVECK_SAMPLE_COUNT as u64,
+            completed_samples: DRIVECK_SAMPLE_COUNT,
+            completed_all_samples: true,
+            success_count: DRIVECK_SAMPLE_COUNT,
+            ..ValidationReport::default()
+        };
         report.sample_status.fill(SampleStatus::Ok);
         let target = TargetInfo {
             kind: TargetKind::BlockDevice,

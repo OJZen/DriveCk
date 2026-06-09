@@ -1,9 +1,11 @@
 use std::ffi::{CStr, CString, c_char, c_void};
 
+#[cfg(windows)]
+use driveck_core::release_unmount_target;
 use driveck_core::{
     ProgressObserver, ProgressUpdate, TargetInfo, ValidationFailure, ValidationOptions,
     ValidationResponse, collect_targets, discover_target, format_report_text, inspect_target,
-    release_unmount_target, unmount_target, validate_target_with_callbacks,
+    unmount_target, validate_target_with_callbacks,
 };
 use serde::{Deserialize, Serialize};
 
@@ -132,6 +134,7 @@ fn execute_validation(
         callback: progress_callback,
         user_data,
     };
+    #[cfg(windows)]
     let target_path = target.path.clone();
     let cancel_bridge = || cancel_callback.is_some_and(|callback| callback(user_data));
     let result = validate_target_with_callbacks(
@@ -140,34 +143,45 @@ fn execute_validation(
         Some(&mut progress_bridge),
         Some(&cancel_bridge),
     );
-    let mut execution = match result {
+    let execution = match result {
         Ok(report) => ValidationExecutionResult {
             response: Some(ValidationResponse { target, report }),
             error: None,
         },
         Err(ValidationFailure { message, report }) => ValidationExecutionResult {
-            response: report.map(|report| ValidationResponse { target, report }),
+            response: report.map(|report| ValidationResponse {
+                target,
+                report: *report,
+            }),
             error: Some(message),
         },
     };
     #[cfg(windows)]
-    if let Err(error) = release_unmount_target(&target_path) {
-        let message = format!(
-            "Validation completed, but DriveCk failed to release the temporary volume locks for {}: {}",
-            target_path, error.message
-        );
-        if let Some(existing) = execution.error.as_mut() {
-            existing.push_str("\r\n\r\n");
-            existing.push_str(&message);
-        } else {
-            execution.error = Some(message);
+    let execution = {
+        let mut execution = execution;
+        if let Err(error) = release_unmount_target(&target_path) {
+            let message = format!(
+                "Validation completed, but DriveCk failed to release the temporary volume locks for {}: {}",
+                target_path, error.message
+            );
+            if let Some(existing) = execution.error.as_mut() {
+                existing.push_str("\r\n\r\n");
+                existing.push_str(&message);
+            } else {
+                execution.error = Some(message);
+            }
         }
-    }
+        execution
+    };
     Ok(execution)
 }
 
 #[unsafe(no_mangle)]
-pub extern "C" fn driveck_ffi_free_string(value: *mut c_char) {
+/// # Safety
+///
+/// `value` must be a string pointer returned by a DriveCk FFI function and must
+/// not have been freed before. Passing any other pointer is undefined behavior.
+pub unsafe extern "C" fn driveck_ffi_free_string(value: *mut c_char) {
     if value.is_null() {
         return;
     }

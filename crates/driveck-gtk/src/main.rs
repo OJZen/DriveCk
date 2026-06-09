@@ -152,7 +152,7 @@ mod app {
             sample_status: Option<SampleStatus>,
             final_update: bool,
         },
-        Finished(WorkerResult),
+        Finished(Box<WorkerResult>),
     }
 
     #[derive(Debug)]
@@ -542,7 +542,7 @@ mod app {
                             };
                             self.set_status(&status_text);
                         }
-                        WorkerMessage::Finished(result) => finished = Some(result),
+                        WorkerMessage::Finished(result) => finished = Some(*result),
                     }
                 }
             }
@@ -614,7 +614,11 @@ mod app {
     ) -> WorkerResult {
         match result {
             Ok(report) => build_worker_result_from_parts(target, Some(report), None),
-            Err(error) => build_worker_result_from_parts(target, error.report, Some(error.message)),
+            Err(error) => build_worker_result_from_parts(
+                target,
+                error.report.map(|report| *report),
+                Some(error.message),
+            ),
         }
     }
 
@@ -980,7 +984,7 @@ mod app {
                 Some(&cancel),
             );
             let worker_result = build_worker_result(target, result);
-            let _ = sender.send(WorkerMessage::Finished(worker_result));
+            let _ = sender.send(WorkerMessage::Finished(Box::new(worker_result)));
         });
 
         StartedValidation {
@@ -1126,7 +1130,7 @@ mod app {
                 Some(helper_process_error(exit_status, &stderr_text, parse_error)),
             )
         });
-        let _ = sender.send(WorkerMessage::Finished(worker_result));
+        let _ = sender.send(WorkerMessage::Finished(Box::new(worker_result)));
     }
 
     fn wait_for_helper_exit(helper_process: &Arc<Mutex<Child>>) -> ExitStatus {
@@ -1285,7 +1289,7 @@ mod app {
 
         let (report, error, exit_code) = match result {
             Ok(report) => (Some(report), None, 0),
-            Err(error) => (error.report, Some(error.message), 1),
+            Err(error) => (error.report.map(|report| *report), Some(error.message), 1),
         };
         let _ = write_helper_event(&mut writer, &HelperEvent::Finished { report, error });
         exit_code

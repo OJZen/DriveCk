@@ -15,14 +15,14 @@ use crate::{
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct ValidationFailure {
     pub message: String,
-    pub report: Option<ValidationReport>,
+    pub report: Option<Box<ValidationReport>>,
 }
 
 impl ValidationFailure {
     fn new(message: impl Into<String>, report: Option<ValidationReport>) -> Self {
         Self {
             message: message.into(),
-            report,
+            report: report.map(Box::new),
         }
     }
 }
@@ -53,6 +53,19 @@ struct ProbeBuffers {
     original: AlignedBuffer,
     pattern: AlignedBuffer,
     readback: AlignedBuffer,
+}
+
+struct ProbeRegionRequest {
+    direct_io_active: bool,
+    offset: u64,
+    size: usize,
+    seed: u64,
+    sample_index: usize,
+}
+
+struct ProbeTimingSinks<'a> {
+    read: Option<&'a mut TimingSeries>,
+    write: Option<&'a mut TimingSeries>,
 }
 
 unsafe impl Send for AlignedBuffer {}
@@ -142,10 +155,12 @@ pub fn validate_target_with_callbacks(
         ));
     }
 
-    let mut report = ValidationReport::default();
-    report.started_at = current_timestamp();
-    report.reported_size_bytes = target.size_bytes;
-    report.seed = options.seed.unwrap_or_else(|| default_seed(target));
+    let mut report = ValidationReport {
+        started_at: current_timestamp(),
+        reported_size_bytes: target.size_bytes,
+        seed: options.seed.unwrap_or_else(|| default_seed(target)),
+        ..ValidationReport::default()
+    };
 
     let alignment = DRIVECK_MIN_REGION_SIZE.max(u64::from(target.logical_block_size.max(4096)));
     let opened =
@@ -184,18 +199,21 @@ pub fn validate_target_with_callbacks(
         }
         let offset = report.sample_offsets[sample_index];
         let status = {
-            let mut read_timings = Some(&mut report.read_timings);
-            let mut write_timings = Some(&mut report.write_timings);
+            let mut timings = ProbeTimingSinks {
+                read: Some(&mut report.read_timings),
+                write: Some(&mut report.write_timings),
+            };
             probe_region(
                 &opened,
-                direct_io_active,
-                offset,
-                region_size,
-                report.seed,
-                sample_index,
+                ProbeRegionRequest {
+                    direct_io_active,
+                    offset,
+                    size: region_size,
+                    seed: report.seed,
+                    sample_index,
+                },
                 &mut buffers,
-                &mut read_timings,
-                &mut write_timings,
+                &mut timings,
             )
         };
         report.sample_status[sample_index] = status;
@@ -340,23 +358,18 @@ fn recorded_write(
 
 fn probe_region(
     opened: &OpenedTarget,
-    direct_io_active: bool,
-    offset: u64,
-    size: usize,
-    seed: u64,
-    sample_index: usize,
+    request: ProbeRegionRequest,
     buffers: &mut ProbeBuffers,
-    read_timings: &mut Option<&mut TimingSeries>,
-    write_timings: &mut Option<&mut TimingSeries>,
+    timings: &mut ProbeTimingSinks<'_>,
 ) -> SampleStatus {
-    let drop_cache_before_read = !direct_io_active;
-    let flush_after_write = !direct_io_active;
+    let drop_cache_before_read = !request.direct_io_active;
+    let flush_after_write = !request.direct_io_active;
 
     if recorded_read(
         opened,
-        offset,
+        request.offset,
         buffers.original.as_mut_slice(),
-        read_timings,
+        &mut timings.read,
         drop_cache_before_read,
     )
     .is_err()
@@ -366,25 +379,25 @@ fn probe_region(
 
     fill_pattern(
         buffers.pattern.as_mut_slice(),
-        seed,
-        sample_index as u64,
-        offset,
+        request.seed,
+        request.sample_index as u64,
+        request.offset,
     );
 
     if recorded_write(
         opened,
-        offset,
+        request.offset,
         buffers.pattern.as_slice(),
-        write_timings,
+        &mut timings.write,
         flush_after_write,
     )
     .is_err()
     {
         if recorded_write(
             opened,
-            offset,
+            request.offset,
             buffers.original.as_slice(),
-            write_timings,
+            &mut timings.write,
             flush_after_write,
         )
         .is_err()
@@ -396,18 +409,18 @@ fn probe_region(
 
     if recorded_read(
         opened,
-        offset,
+        request.offset,
         buffers.readback.as_mut_slice(),
-        read_timings,
+        &mut timings.read,
         drop_cache_before_read,
     )
     .is_err()
     {
         if recorded_write(
             opened,
-            offset,
+            request.offset,
             buffers.original.as_slice(),
-            write_timings,
+            &mut timings.write,
             flush_after_write,
         )
         .is_err()
@@ -417,12 +430,12 @@ fn probe_region(
         return SampleStatus::ReadError;
     }
 
-    if buffers.pattern.as_slice()[..size] != buffers.readback.as_slice()[..size] {
+    if buffers.pattern.as_slice()[..request.size] != buffers.readback.as_slice()[..request.size] {
         if recorded_write(
             opened,
-            offset,
+            request.offset,
             buffers.original.as_slice(),
-            write_timings,
+            &mut timings.write,
             flush_after_write,
         )
         .is_err()
@@ -434,9 +447,9 @@ fn probe_region(
 
     if recorded_write(
         opened,
-        offset,
+        request.offset,
         buffers.original.as_slice(),
-        write_timings,
+        &mut timings.write,
         flush_after_write,
     )
     .is_err()
