@@ -1,5 +1,5 @@
 use std::{
-    alloc::{Layout, alloc_zeroed, dealloc},
+    alloc::{alloc_zeroed, dealloc, Layout},
     fmt,
     mem::size_of,
     ptr::NonNull,
@@ -7,9 +7,9 @@ use std::{
 };
 
 use crate::{
-    CancelObserver, DRIVECK_MIN_REGION_SIZE, DRIVECK_SAMPLE_COUNT, ProgressObserver,
-    ProgressUpdate, SampleStatus, TargetInfo, TimingSeries, ValidationOptions, ValidationReport,
-    format_bytes, platform::OpenedTarget,
+    format_bytes, platform::OpenedTarget, CancelObserver, ProgressObserver, ProgressUpdate,
+    SampleStatus, TargetInfo, TimingSeries, ValidationOptions, ValidationReport,
+    DRIVECK_MIN_REGION_SIZE, DRIVECK_SAMPLE_COUNT,
 };
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -554,7 +554,7 @@ fn finalize_extents(report: &mut ValidationReport) {
     match first_non_green {
         None => report.validated_drive_size_bytes = report.reported_size_bytes,
         Some(index) if report.sample_status[index] != SampleStatus::Untested => {
-            report.validated_drive_size_bytes = sample_end(report, index);
+            report.validated_drive_size_bytes = report.sample_offsets[index];
         }
         Some(index) if index > 0 => {
             report.validated_drive_size_bytes = sample_end(report, index - 1);
@@ -584,10 +584,13 @@ fn count_status(report: &mut ValidationReport, status: SampleStatus) {
 #[cfg(test)]
 mod tests {
     use crate::{
-        DRIVECK_MIN_REGION_SIZE, DRIVECK_SAMPLE_COUNT, ValidationOptions, validate_target,
+        validate_target, SampleStatus, ValidationOptions, ValidationReport,
+        DRIVECK_MIN_REGION_SIZE, DRIVECK_SAMPLE_COUNT,
     };
 
-    use super::{TargetInfo, build_sample_order, default_region_size, effective_direct_io};
+    use super::{
+        build_sample_order, default_region_size, effective_direct_io, finalize_extents, TargetInfo,
+    };
 
     #[test]
     fn sample_order_preserves_front_and_back_priority() {
@@ -639,5 +642,35 @@ mod tests {
         let error = validate_target(&target, &ValidationOptions::default())
             .expect_err("mounted targets must be rejected");
         assert!(error.message.contains("mounted"));
+    }
+
+    #[test]
+    fn validated_size_stops_at_first_failed_region_start() {
+        let mut report = ValidationReport {
+            reported_size_bytes: DRIVECK_MIN_REGION_SIZE * DRIVECK_SAMPLE_COUNT as u64,
+            region_size_bytes: DRIVECK_MIN_REGION_SIZE,
+            completed_samples: DRIVECK_SAMPLE_COUNT,
+            completed_all_samples: true,
+            success_count: DRIVECK_SAMPLE_COUNT - 1,
+            mismatch_count: 1,
+            ..ValidationReport::default()
+        };
+        for index in 0..DRIVECK_SAMPLE_COUNT {
+            report.sample_offsets[index] = DRIVECK_MIN_REGION_SIZE * index as u64;
+            report.sample_status[index] = SampleStatus::Ok;
+        }
+        let failed_index = DRIVECK_SAMPLE_COUNT - 1;
+        report.sample_status[failed_index] = SampleStatus::VerifyMismatch;
+
+        finalize_extents(&mut report);
+
+        assert_eq!(
+            report.validated_drive_size_bytes,
+            report.sample_offsets[failed_index]
+        );
+        assert_eq!(
+            report.highest_valid_region_bytes,
+            report.sample_offsets[failed_index]
+        );
     }
 }
